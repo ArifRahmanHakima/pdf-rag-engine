@@ -6,4 +6,6 @@ postgres-initdb:
 	python api.services.init_db
 uvicorn api.main:app --reload:
 	uvicorn api.main:app --reload	
-
+Remove-Items -Path .\data\* -Recurse -Force:
+	Remove-Item uploads -Recurse -Force
+	Remove-Item rag_Storage -Recurse -Force

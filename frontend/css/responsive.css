@@ -6,6 +6,7 @@
     height: calc(100vh - 60px);
     z-index: 50;
     box-shadow: 2px 0 10px rgba(0,0,0,0.1);
+    transition: transform 0.3s ease;
   }
   
   .sidebar.active {
@@ -20,13 +21,8 @@
     font-size: 48px;
   }
   
-  .upload-area {
-    flex-direction: column;
-  }
-  
   .upload-box {
-    width: 100%;
-    max-width: 500px;
+    max-width: 600px;
   }
 }
 
@@ -35,30 +31,20 @@
     display: none;
   }
   
-  .upgrade-btn {
-    padding: 8px 12px;
-    font-size: 12px;
-  }
-  
   .logo-text-header {
     display: none;
   }
   
   .pdf-viewer-column {
-    display: none;
+    display: none !important;
   }
   
   .resizer {
-    display: none;
+    display: none !important;
   }
   
   .chat-column {
-    width: 100%;
-  }
-  
-  .badges {
-    flex-direction: column;
-    gap: 15px;
+    width: 100% !important;
   }
   
   .welcome-title {
@@ -72,6 +58,24 @@
   .bot-message, .user-message {
     max-width: 90%;
   }
+  
+  .upload-box {
+    padding: 60px 20px;
+  }
+  
+  .upload-icon-large svg {
+    width: 48px;
+    height: 48px;
+  }
+  
+  .upload-text {
+    font-size: 16px;
+  }
+  
+  .upload-btn-large {
+    padding: 12px 24px;
+    font-size: 14px;
+  }
 }
 
 @media (max-width: 480px) {
@@ -83,7 +87,49 @@
     padding: 12px;
   }
   
-  .input-actions {
-    flex-wrap: wrap;
+  .top-header {
+    padding: 0 12px;
+  }
+  
+  .welcome-title {
+    font-size: 28px;
+  }
+  
+  .upload-box {
+    padding: 40px 16px;
+  }
+  
+  .process-step {
+    padding: 8px;
+  }
+  
+  .step-text {
+    font-size: 13px;
+  }
+  
+  .step-progress {
+    width: 60px;
+  }
+}
+
+/* Overlay untuk sidebar mobile */
+.sidebar-overlay {
+  display: none;
+  position: fixed;
+  top: 60px;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 49;
+}
+
+.sidebar.active + .sidebar-overlay {
+  display: block;
+}
+
+@media (min-width: 1025px) {
+  .sidebar-overlay {
+    display: none !important;
   }
 }

@@ -17,6 +17,8 @@ const UIHandler = {
   isResizing: false,
   startX: 0,
   startLeftWidth: 0,
+  currentUploadId: null,
+  progressInterval: null,
 
   init() {
     this.elements.sidebar = document.getElementById('sidebar');
@@ -37,25 +39,25 @@ const UIHandler = {
 
   attachEvents() {
     // Hamburger menu
-    this.elements.hamburger.addEventListener('click', () => this.toggleSidebar());
+    this.elements.hamburger?.addEventListener('click', () => this.toggleSidebar());
 
     // Close sidebar when clicking outside on mobile
     document.addEventListener('click', (e) => {
       if (STATE.isMobile && 
-          this.elements.sidebar.classList.contains('active') &&
+          this.elements.sidebar?.classList.contains('active') &&
           !this.elements.sidebar.contains(e.target) &&
-          !this.elements.hamburger.contains(e.target)) {
-        this.toggleSidebar();
+          !this.elements.hamburger?.contains(e.target)) {
+        this.closeSidebar();
       }
     });
 
     // New chat button
-    this.elements.newChatBtn.addEventListener('click', () => {
+    this.elements.newChatBtn?.addEventListener('click', () => {
       this.elements.pdfInput.click();
     });
 
     // PDF upload
-    this.elements.pdfInput.addEventListener('change', async (e) => {
+    this.elements.pdfInput?.addEventListener('change', async (e) => {
       await this.handleFileUpload(e);
     });
 
@@ -94,34 +96,33 @@ const UIHandler = {
   },
 
   setupDragDrop() {
-    const uploadArea = document.getElementById('uploadArea');
-    if (!uploadArea) return;
+    const uploadBox = document.querySelector('.upload-box');
+    if (!uploadBox) return;
 
     ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-      uploadArea.addEventListener(eventName, (e) => {
+      uploadBox.addEventListener(eventName, (e) => {
         e.preventDefault();
         e.stopPropagation();
       });
     });
 
     ['dragenter', 'dragover'].forEach(eventName => {
-      uploadArea.addEventListener(eventName, () => {
-        uploadArea.classList.add('drag-over');
+      uploadBox.addEventListener(eventName, () => {
+        uploadBox.classList.add('drag-over');
       });
     });
 
     ['dragleave', 'drop'].forEach(eventName => {
-      uploadArea.addEventListener(eventName, () => {
-        uploadArea.classList.remove('drag-over');
+      uploadBox.addEventListener(eventName, () => {
+        uploadBox.classList.remove('drag-over');
       });
     });
 
-    uploadArea.addEventListener('drop', async (e) => {
+    uploadBox.addEventListener('drop', async (e) => {
       const files = e.dataTransfer.files;
       if (files.length > 0) {
         const file = files[0];
         if (file.type.includes('pdf')) {
-          this.elements.pdfInput.files = files;
           await this.handleFileUpload({ target: { files: [file] } });
         } else {
           this.showError('Harap upload file PDF!');
@@ -131,98 +132,274 @@ const UIHandler = {
   },
 
   toggleSidebar() {
-    this.elements.sidebar.classList.toggle('active');
-    this.elements.hamburger.classList.toggle('active');
+    this.elements.sidebar?.classList.toggle('active');
+    this.elements.hamburger?.classList.toggle('active');
+  },
+
+  closeSidebar() {
+    this.elements.sidebar?.classList.remove('active');
+    this.elements.hamburger?.classList.remove('active');
   },
 
   checkMobile() {
     STATE.isMobile = window.innerWidth <= 1024;
     
     if (!STATE.isMobile) {
-      this.elements.sidebar.classList.remove('active');
-      this.elements.hamburger.classList.remove('active');
+      this.closeSidebar();
     }
   },
 
-  async processPDF(file) {
+async processPDF(file) {
+    if (STATE.isProcessing) {
+      this.showError('Sedang memproses file lain. Mohon tunggu...');
+      return;
+    }
+
+    STATE.isProcessing = true;
+
     try {
+      // Generate unique upload ID
+      this.currentUploadId = Utils.generateUploadId();
+
       // Switch to chat interface
       this.elements.welcomeScreen.style.display = 'none';
       this.elements.chatInterface.classList.add('active');
       
       // Update title
       STATE.currentPdfName = file.name;
+      STATE.currentFileName = file.name;
       this.elements.chatTitle.textContent = `📄 ${file.name}`;
       
       // Clear previous chat
       ChatHandler.clearMessages();
       ChatHandler.enableInput(false);
       
-      // Show processing animation
-      await ChatHandler.showProcessing();
-      
       // Add to chat list
       this.addToChatList(file.name);
       
-      // Load PDF for viewing
-      await PDFHandler.loadPDF(file);
+      // Show processing indicator
+      this.showProcessingSteps();
+      
+      // Load PDF for viewing (parallel with backend processing)
+      const pdfLoadPromise = PDFHandler.loadPDF(file);
+      
+      // Start step 1: Reading
+      this.updateProcessingStep({ step: 'reading', progress: 0, status: 'processing' });
+      
+      await Utils.sleep(500);
+      
+      // Upload to backend
+      const uploadResult = await this.uploadToBackend(file);
+      
+      // Wait for PDF load
+      await pdfLoadPromise;
+      
+      // Hide processing indicator
+      this.hideProcessingSteps();
+      
+      // Show summary if available
+      if (uploadResult && uploadResult.summary) {
+        const summaryHtml = Utils.parseMarkdown(`📋 **Ringkasan Dokumen:**\n\n${uploadResult.summary}`);
+        ChatHandler.addMessage('bot', summaryHtml, true);
+      }
       
       // Add welcome message
-      const welcomeMsg = `Halo! Saya sudah membaca dokumen "${file.name}". File berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
+      const welcomeMsg = `Halo! Dokumen "${file.name}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
       ChatHandler.addMessage('bot', welcomeMsg);
+      
+      // Save doc_id dari response backend
+      if (uploadResult && uploadResult.doc_id) {
+        STATE.docId = uploadResult.doc_id;
+        console.log('📄 Document ID:', STATE.docId);
+      }
       
       // Enable input
       ChatHandler.enableInput(true);
       
-      // Upload to backend (non-blocking)
-      this.uploadToBackend(file).catch(error => {
-        console.error('Background upload error:', error);
-      });
+      this.showSuccess('PDF berhasil diproses!');
       
     } catch (error) {
       console.error('Error processing PDF:', error);
-      this.showError('Terjadi kesalahan saat memproses PDF.');
-      ChatHandler.addMessage('bot', 'Maaf, terjadi kesalahan saat memproses PDF. Silakan coba lagi.');
+      this.showError(`Terjadi kesalahan: ${error.message}`);
+      ChatHandler.addMessage('bot', `❌ Maaf, terjadi kesalahan: ${error.message}`);
       ChatHandler.enableInput(true);
+      this.hideProcessingSteps();
+    } finally {
+      STATE.isProcessing = false;
+      this.currentUploadId = null;
     }
   },
 
   async uploadToBackend(file) {
-    try {
+    return new Promise((resolve, reject) => {
       const formData = new FormData();
       formData.append('file', file);
-      formData.append('user_id', STATE.userId);
-      
-      const response = await fetch(`${CONFIG.API_BASE_URL}/upload`, {
-        method: 'POST',
-        body: formData
-      });
-      
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
-      
-      const data = await response.json();
-      
-      if (data.status === 'success') {
-        console.log('✅ PDF uploaded successfully:', data);
-        
-        // Update doc ID if provided
-        if (data.doc_id) {
-          STATE.docId = data.doc_id;
+
+      const xhr = new XMLHttpRequest();
+
+      // Upload progress
+      xhr.upload.addEventListener('progress', (e) => {
+        if (e.lengthComputable) {
+          const percentComplete = (e.loaded / e.total) * 100;
+          this.updateProcessingStep({ 
+            step: 'reading', 
+            progress: percentComplete, 
+            status: 'processing',
+            message: `Uploading... ${percentComplete.toFixed(0)}%`
+          });
         }
-        
-        STATE.chatId = null;
-        
-        // Show success notification (optional)
-        // this.showSuccess('PDF berhasil diupload ke server');
-      } else {
-        throw new Error(data.message || 'Gagal memproses PDF');
+      });
+
+      // Upload complete, now processing
+      xhr.addEventListener('load', async () => {
+        if (xhr.status === 200) {
+          try {
+            const response = JSON.parse(xhr.responseText);
+            
+            if (response.status === 'success') {
+              // Complete step 1
+              this.updateProcessingStep({ step: 'reading', progress: 100, status: 'completed' });
+              await Utils.sleep(300);
+              
+              // Step 2: Analyzing
+              this.updateProcessingStep({ step: 'analyzing', progress: 0, status: 'processing' });
+              await Utils.sleep(800);
+              
+              // Simulate analyzing progress
+              for (let i = 0; i <= 100; i += 25) {
+                this.updateProcessingStep({ step: 'analyzing', progress: i, status: 'processing' });
+                await Utils.sleep(200);
+              }
+              this.updateProcessingStep({ step: 'analyzing', progress: 100, status: 'completed' });
+              await Utils.sleep(300);
+              
+              // Step 3: Embedding
+              this.updateProcessingStep({ step: 'embedding', progress: 0, status: 'processing' });
+              
+              // Simulate embedding progress
+              for (let i = 0; i <= 100; i += 20) {
+                this.updateProcessingStep({ step: 'embedding', progress: i, status: 'processing' });
+                await Utils.sleep(300);
+              }
+              this.updateProcessingStep({ step: 'embedding', progress: 100, status: 'completed' });
+              await Utils.sleep(300);
+              
+              // Step 4: Ready
+              this.updateProcessingStep({ step: 'ready', progress: 100, status: 'completed' });
+              await Utils.sleep(500);
+              
+              resolve(response);
+            } else {
+              reject(new Error(response.detail || 'Upload failed'));
+            }
+          } catch (error) {
+            reject(new Error('Invalid response from server'));
+          }
+        } else {
+          try {
+            const errorResponse = JSON.parse(xhr.responseText);
+            reject(new Error(errorResponse.detail || `HTTP error! status: ${xhr.status}`));
+          } catch {
+            reject(new Error(`HTTP error! status: ${xhr.status}`));
+          }
+        }
+      });
+
+      xhr.addEventListener('error', () => {
+        reject(new Error('Network error during upload'));
+      });
+
+      xhr.addEventListener('abort', () => {
+        reject(new Error('Upload aborted'));
+      });
+
+      // Send request
+      xhr.open('POST', `${CONFIG.API_BASE_URL}/upload`);
+      xhr.send(formData);
+    });
+  },
+
+  showProcessingSteps() {
+    const processingIndicator = document.getElementById('processingIndicator');
+    processingIndicator.classList.add('active');
+    
+    // Reset all steps
+    CONFIG.PROCESSING_STEPS.forEach(step => {
+      const stepEl = document.getElementById(step.id);
+      stepEl.classList.remove('active', 'completed', 'error');
+    });
+  },
+
+  hideProcessingSteps() {
+    const processingIndicator = document.getElementById('processingIndicator');
+    processingIndicator.classList.remove('active');
+  },
+
+  updateProcessingStep(data) {
+    const { step, progress, status, message } = data;
+    
+    // Find step by key
+    const stepConfig = CONFIG.PROCESSING_STEPS.find(s => s.key === step);
+    if (!stepConfig) return;
+    
+    const stepEl = document.getElementById(stepConfig.id);
+    if (!stepEl) return;
+
+    // Remove all states first
+    stepEl.classList.remove('active', 'completed', 'error');
+
+    if (status === 'processing') {
+      // Mark previous steps as completed
+      const currentIndex = CONFIG.PROCESSING_STEPS.findIndex(s => s.id === stepConfig.id);
+      CONFIG.PROCESSING_STEPS.forEach((s, index) => {
+        if (index < currentIndex) {
+          const prevStepEl = document.getElementById(s.id);
+          prevStepEl.classList.remove('active');
+          prevStepEl.classList.add('completed');
+        }
+      });
+
+      stepEl.classList.add('active');
+      
+      // Update progress bar
+      if (progress !== undefined) {
+        this.updateStepProgress(stepConfig.id, progress);
       }
-    } catch (error) {
-      console.error('❌ Error upload PDF:', error);
-      // Don't show error to user since PDF viewer still works
-      // ChatHandler.addMessage('bot', '⚠️ Upload ke server gagal, tapi Anda masih bisa melihat PDF.');
+      
+      // Update text if message provided
+      if (message) {
+        const stepText = stepEl.querySelector('.step-text');
+        if (stepText) {
+          const originalText = stepConfig.name;
+          stepText.textContent = message || originalText;
+        }
+      }
+    } else if (status === 'completed') {
+      stepEl.classList.add('completed');
+      
+      // Reset text to original
+      const stepText = stepEl.querySelector('.step-text');
+      if (stepText) {
+        stepText.textContent = stepConfig.name;
+      }
+    } else if (status === 'error') {
+      stepEl.classList.add('error');
+      if (message) {
+        const stepText = stepEl.querySelector('.step-text');
+        if (stepText) {
+          stepText.textContent = message;
+        }
+      }
+    }
+  },
+
+  updateStepProgress(stepId, percent) {
+    const stepEl = document.getElementById(stepId);
+    if (!stepEl) return;
+
+    const progressBar = stepEl.querySelector('.step-progress');
+    if (progressBar) {
+      progressBar.style.setProperty('--progress', `${percent}%`);
     }
   },
 
@@ -297,12 +474,34 @@ const UIHandler = {
   },
 
   showError(message) {
-    alert(message);
-    // You can replace this with a custom toast notification
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-error';
+    toast.innerHTML = `
+      <span>❌</span>
+      <span>${Utils.escapeHtml(message)}</span>
+    `;
+    document.body.appendChild(toast);
+
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 4000);
   },
 
   showSuccess(message) {
-    console.log('✅', message);
-    // You can replace this with a custom toast notification
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-success';
+    toast.innerHTML = `
+      <span>✅</span>
+      <span>${Utils.escapeHtml(message)}</span>
+    `;
+    document.body.appendChild(toast);
+
+    setTimeout(() => toast.classList.add('show'), 10);
+    setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   }
 };

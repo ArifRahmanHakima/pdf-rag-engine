@@ -1,4 +1,3 @@
-// ============= CHAT HANDLER MODULE =============
 const ChatHandler = {
   elements: {
     messages: null,
@@ -9,7 +8,7 @@ const ChatHandler = {
     qualityBtn: null
   },
 
-  currentMode: 'quality', // 'fast' or 'quality'
+  currentMode: 'quality',
 
   init() {
     this.elements.messages = document.getElementById('chatMessages');
@@ -18,7 +17,6 @@ const ChatHandler = {
     this.elements.processingIndicator = document.getElementById('processingIndicator');
     this.elements.fastBtn = document.getElementById('fastBtn');
     this.elements.qualityBtn = document.getElementById('qualityBtn');
-
     this.attachEvents();
   },
 
@@ -47,74 +45,164 @@ const ChatHandler = {
 
   setMode(mode) {
     this.currentMode = mode;
-
-    if (mode === 'fast') {
-      this.elements.fastBtn.classList.add('active');
-      this.elements.qualityBtn.classList.remove('active');
-    } else {
-      this.elements.fastBtn.classList.remove('active');
-      this.elements.qualityBtn.classList.add('active');
-    }
+    this.elements.fastBtn.classList.toggle('active', mode === 'fast');
+    this.elements.qualityBtn.classList.toggle('active', mode === 'quality');
   },
 
-  async sendMessage() {
+async sendMessage() {
     const question = this.elements.input.value.trim();
     if (!question) return;
 
-    // Tambahkan pesan user
+    // Check if PDF is loaded
+    if (!STATE.docId) {
+      UIHandler.showError('Silakan upload PDF terlebih dahulu!');
+      return;
+    }
+
+    // Add user message
     this.addMessage('user', question);
     this.elements.input.value = '';
     this.elements.input.style.height = 'auto';
-
-    // Tampilkan bubble bot loading
-    this.addBotLoadingBubble();
-
+    
+    // Disable send button
     this.elements.sendBtn.disabled = true;
+    
+    // Show enhanced typing indicator
+    const typingId = this.showEnhancedTypingIndicator();
 
     try {
       const params = new URLSearchParams({
         question: question,
-        doc_id: STATE.docId,
+        doc_id: STATE.docId,  // Gunakan doc_id yang sudah disimpan
         user_id: STATE.userId,
-        mode: this.currentMode
       });
-
+      
       if (STATE.chatId) {
         params.append('chat_id', STATE.chatId);
       }
-
+      
       const response = await fetch(`${CONFIG.API_BASE_URL}/chat/send?${params.toString()}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
         }
       });
-
+      
       if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
+        const errorData = await response.json();
+        throw new Error(errorData.detail || `HTTP error! status: ${response.status}`);
       }
-
+      
       const data = await response.json();
-
+      
+      // Remove typing indicator
+      this.removeTypingIndicator(typingId);
+      
+      // Update chat ID from response
       if (data.chat_id) {
         STATE.chatId = data.chat_id;
       }
-
-      this.removeBotLoadingBubble();
-
+      
+      // Add bot response with reveal animation
       if (data.answer) {
-        await Utils.sleep(300);
-        this.addMessage('bot', data.answer);
+        await Utils.sleep(300); // Small delay for natural feel
+        const answerHtml = Utils.parseMarkdown(data.answer);
+        this.addMessage('bot', answerHtml, true, true); // true untuk HTML, true untuk reveal animation
       } else {
         throw new Error('Tidak ada jawaban dari server');
       }
-
+      
     } catch (error) {
-      this.removeBotLoadingBubble();
-      this.addMessage('bot', 'Maaf, terjadi kesalahan: ' + error.message);
+      console.error('Error sending message:', error);
+      this.removeTypingIndicator(typingId);
+      this.addMessage('bot', `❌ Maaf, terjadi kesalahan: ${error.message}`);
+      UIHandler.showError(`Gagal mengirim pesan: ${error.message}`);
     } finally {
       this.elements.sendBtn.disabled = false;
       this.elements.input.focus();
+    }
+  },
+
+  addMessage(role, text, isHtml = false, withReveal = false) {
+    const message = document.createElement('div');
+    message.className = `message ${role}-message`;
+    
+    if (withReveal) {
+      message.classList.add('active');
+    }
+    
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = role === 'bot' ? '🤖' : '👤';
+    
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    
+    if (withReveal) {
+      content.classList.add('revealing');
+    }
+    
+    if (isHtml) {
+      content.innerHTML = text;
+    } else {
+      content.textContent = text;
+    }
+    
+    message.appendChild(avatar);
+    message.appendChild(content);
+    this.elements.messages.appendChild(message);
+    
+    // Remove active class after animation
+    if (withReveal) {
+      setTimeout(() => {
+        message.classList.remove('active');
+      }, 2000);
+    }
+    
+    // Smooth scroll to bottom
+    this.scrollToBottom();
+  },
+
+  showEnhancedTypingIndicator() {
+    const typingId = 'typing-' + Date.now();
+    const message = document.createElement('div');
+    message.className = 'message bot-message';
+    message.id = typingId;
+    
+    const avatar = document.createElement('div');
+    avatar.className = 'message-avatar';
+    avatar.textContent = '🤖';
+    
+    const content = document.createElement('div');
+    content.className = 'message-content typing-indicator';
+    content.innerHTML = `
+      <div class="typing-dots">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    `;
+    
+    message.appendChild(avatar);
+    message.appendChild(content);
+    this.elements.messages.appendChild(message);
+    
+    this.scrollToBottom();
+    
+    return typingId;
+  },
+
+  removeTypingIndicator(typingId) {
+    const typingElement = document.getElementById(typingId);
+    if (typingElement) {
+      // Fade out animation
+      typingElement.style.opacity = '0';
+      typingElement.style.transform = 'translateY(-10px)';
+      typingElement.style.transition = 'all 0.3s ease';
+      
+      setTimeout(() => {
+        typingElement.remove();
+      }, 300);
     }
   },
 
@@ -128,21 +216,14 @@ const ChatHandler = {
 
     const content = document.createElement('div');
     content.className = 'message-content';
-
-    if (role === 'bot') {
-      content.innerHTML = marked.parse(text);
-    } else {
-      content.textContent = text;
-    }
+    content.innerHTML = role === 'bot' ? marked.parse(text) : Utils.escapeHtml(text);
 
     message.appendChild(avatar);
     message.appendChild(content);
     this.elements.messages.appendChild(message);
-
     this.scrollToBottom();
   },
 
-  // ✅ TAMBAHAN: animasi bubble loading bot
   addBotLoadingBubble() {
     const bubble = document.createElement('div');
     bubble.className = 'message bot-message loading-bubble';
@@ -153,16 +234,11 @@ const ChatHandler = {
 
     const content = document.createElement('div');
     content.className = 'message-content';
-    content.innerHTML = `
-      <span class="typing-loader">
-        <span>.</span><span>.</span><span>.</span>
-      </span>
-    `;
+    content.innerHTML = `<span class="typing-loader"><span>.</span><span>.</span><span>.</span></span>`;
 
     bubble.appendChild(avatar);
     bubble.appendChild(content);
     bubble.id = "loadingBubble";
-
     this.elements.messages.appendChild(bubble);
     this.scrollToBottom();
   },
@@ -171,7 +247,7 @@ const ChatHandler = {
     const bubble = document.getElementById("loadingBubble");
     if (bubble) bubble.remove();
   },
-  
+
   scrollToBottom() {
     this.elements.messages.scrollTo({
       top: this.elements.messages.scrollHeight,
@@ -179,34 +255,37 @@ const ChatHandler = {
     });
   },
 
-  async showProcessing() {
+  // NEW: animasi dikontrol manual
+  startProcessing() {
     this.elements.processingIndicator.classList.add('active');
+    this.elements.currentStep = 0;
+    this._advanceProcessingStep();
+  },
 
-    for (let i = 0; i < CONFIG.PROCESSING_STEPS.length; i++) {
-      const step = CONFIG.PROCESSING_STEPS[i];
-      const stepEl = document.getElementById(step.id);
-
-      document.querySelectorAll('.process-step').forEach(s => {
-        s.classList.remove('active', 'completed');
-      });
-
-      stepEl.classList.add('active');
-      await Utils.sleep(step.duration);
-
+  endProcessing() {
+    const steps = CONFIG.PROCESSING_STEPS;
+    for (let i = this.elements.currentStep; i < steps.length; i++) {
+      const stepEl = document.getElementById(steps[i].id);
       stepEl.classList.remove('active');
       stepEl.classList.add('completed');
-
-      if (i < CONFIG.PROCESSING_STEPS.length - 1) {
-        await Utils.sleep(300);
-      }
     }
-
-    await Utils.sleep(500);
     this.elements.processingIndicator.classList.remove('active');
+  },
 
-    document.querySelectorAll('.process-step').forEach(s => {
-      s.classList.remove('active', 'completed');
-    });
+  _advanceProcessingStep() {
+    const steps = CONFIG.PROCESSING_STEPS;
+    if (this.elements.currentStep >= steps.length) return;
+
+    const step = steps[this.elements.currentStep];
+    const stepEl = document.getElementById(step.id);
+    stepEl.classList.add('active');
+
+    setTimeout(() => {
+      stepEl.classList.remove('active');
+      stepEl.classList.add('completed');
+      this.elements.currentStep++;
+      this._advanceProcessingStep();
+    }, step.duration);
   },
 
   clearMessages() {
@@ -217,9 +296,6 @@ const ChatHandler = {
   enableInput(enable = true) {
     this.elements.input.disabled = !enable;
     this.elements.sendBtn.disabled = !enable;
-
-    if (enable) {
-      this.elements.input.focus();
-    }
+    if (enable) this.elements.input.focus();
   }
 };

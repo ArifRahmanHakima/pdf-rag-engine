@@ -1,32 +1,36 @@
 // ============= CONFIGURATION =============
 const CONFIG = {
-  API_BASE_URL: '',
+  API_BASE_URL: window.location.origin, // Auto-detect base URL
+  WS_BASE_URL: window.location.origin.replace('http', 'ws'), // WebSocket URL
   PDF_WORKER_URL: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
-  MAX_FILE_SIZE: 5 * 1024 * 1024, // 5MB
+  MAX_FILE_SIZE: 10 * 1024 * 1024, // 10MB sesuai .env
   DEFAULT_SCALE: 1.2,
   MIN_SCALE: 0.5,
   MAX_SCALE: 3.0,
   SCALE_STEP: 0.2,
   PROCESSING_STEPS: [
-    { id: 'step1', duration: 1500 },
-    { id: 'step2', duration: 1500 },
-    { id: 'step3', duration: 1500 },
-    { id: 'step4', duration: 1000 }
+    { id: 'step1', name: 'Reading PDF...', key: 'reading' },
+    { id: 'step2', name: 'Analyzing content...', key: 'analyzing' },
+    { id: 'step3', name: 'Creating embeddings...', key: 'embedding' },
+    { id: 'step4', name: 'Ready to chat!', key: 'ready' }
   ]
 };
 
 // Global state
 const STATE = {
   chatId: null,
-  docId: "doc001",
-  userId: "user123",
+  docId: null,
+  userId: "user_" + Math.random().toString(36).substr(2, 9),
   currentPdfName: "",
+  currentFileName: "",
   pdfDoc: null,
   pageNum: 1,
   pageRendering: false,
   pageNumPending: null,
   scale: CONFIG.DEFAULT_SCALE,
-  isMobile: window.innerWidth <= 768
+  isMobile: window.innerWidth <= 768,
+  isProcessing: false,
+  ws: null
 };
 
 // Configure PDF.js
@@ -62,5 +66,21 @@ const Utils = {
       clearTimeout(timeout);
       timeout = setTimeout(later, wait);
     };
+  },
+
+  generateUploadId() {
+    return `upload_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+  },
+
+  // Parse markdown untuk menampilkan formatting di chat
+  parseMarkdown(text) {
+    if (typeof marked !== 'undefined') {
+      return marked.parse(text);
+    }
+    // Fallback simple markdown
+    return text
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      .replace(/\n/g, '<br>');
   }
 };
