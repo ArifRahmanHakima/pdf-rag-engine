@@ -17,6 +17,8 @@ const UIHandler = {
   isResizing: false,
   startX: 0,
   startLeftWidth: 0,
+  statusPollingInterval: null,
+  currentFileName: null,
 
   init() {
     this.elements.sidebar = document.getElementById('sidebar');
@@ -152,6 +154,7 @@ const UIHandler = {
       
       // Update title
       STATE.currentPdfName = file.name;
+      this.currentFileName = file.name;
       this.elements.chatTitle.textContent = `📄 ${file.name}`;
       
       // Clear previous chat
@@ -167,17 +170,13 @@ const UIHandler = {
       // Load PDF for viewing
       await PDFHandler.loadPDF(file);
       
-      // Add welcome message
-      const welcomeMsg = `Halo! Saya sudah membaca dokumen "${file.name}". File berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
-      ChatHandler.addMessage('bot', welcomeMsg);
+      // Upload to backend and start polling
+      ChatHandler.addMessage('bot', `⏳ Memproses dokumen "${file.name}"... Mohon tunggu, ini mungkin memakan waktu beberapa saat.`);
       
-      // Enable input
-      ChatHandler.enableInput(true);
+      await this.uploadToBackend(file);
       
-      // Upload to backend (non-blocking)
-      this.uploadToBackend(file).catch(error => {
-        console.error('Background upload error:', error);
-      });
+      // Start polling for status
+      this.startStatusPolling(file.name);
       
     } catch (error) {
       console.error('Error processing PDF:', error);
@@ -205,7 +204,7 @@ const UIHandler = {
       const data = await response.json();
       
       if (data.status === 'success') {
-        console.log('✅ PDF uploaded successfully:', data);
+        console.log('✅ PDF upload initiated:', data);
         
         // Update doc ID if provided
         if (data.doc_id) {
@@ -214,15 +213,81 @@ const UIHandler = {
         
         STATE.chatId = null;
         
-        // Show success notification (optional)
-        // this.showSuccess('PDF berhasil diupload ke server');
+        // Don't show success yet - wait for polling to confirm completion
       } else {
         throw new Error(data.message || 'Gagal memproses PDF');
       }
     } catch (error) {
       console.error('❌ Error upload PDF:', error);
-      // Don't show error to user since PDF viewer still works
-      // ChatHandler.addMessage('bot', '⚠️ Upload ke server gagal, tapi Anda masih bisa melihat PDF.');
+      ChatHandler.addMessage('bot', '⚠️ Upload ke server gagal. Silakan coba lagi.');
+      ChatHandler.enableInput(true);
+      throw error;
+    }
+  },
+
+  startStatusPolling(filename) {
+    console.log('🔄 Starting status polling for:', filename);
+    
+    // Clear any existing polling
+    if (this.statusPollingInterval) {
+      clearInterval(this.statusPollingInterval);
+    }
+    
+    // Poll every 2 seconds
+    this.statusPollingInterval = setInterval(async () => {
+      try {
+        await this.checkProcessingStatus(filename);
+      } catch (error) {
+        console.error('Error checking status:', error);
+      }
+    }, 2000);
+    
+    // Also check immediately
+    this.checkProcessingStatus(filename);
+  },
+
+  async checkProcessingStatus(filename) {
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/status/${encodeURIComponent(filename)}`);
+      
+      if (!response.ok) {
+        console.log('Status endpoint not available yet');
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('📊 Processing status:', data.status);
+      
+      if (data.status === 'completed') {
+        // Stop polling
+        clearInterval(this.statusPollingInterval);
+        this.statusPollingInterval = null;
+        
+        // Show success message
+        const welcomeMsg = `✅ Dokumen "${filename}" berhasil diproses! Silakan tanyakan apapun tentang isi dokumen ini.`;
+        ChatHandler.addMessage('bot', welcomeMsg);
+        
+        // Enable input
+        ChatHandler.enableInput(true);
+        
+        console.log('✅ Processing completed successfully');
+      } else if (data.status === 'failed') {
+        // Stop polling
+        clearInterval(this.statusPollingInterval);
+        this.statusPollingInterval = null;
+        
+        // Show error message
+        ChatHandler.addMessage('bot', '❌ Maaf, terjadi kesalahan saat memproses dokumen. Silakan coba lagi.');
+        ChatHandler.enableInput(true);
+        
+        console.error('❌ Processing failed');
+      } else if (data.status === 'processing') {
+        console.log('⏳ Still processing...');
+      } else if (data.status === 'uploading') {
+        console.log('📤 Uploading...');
+      }
+    } catch (error) {
+      console.error('Error checking processing status:', error);
     }
   },
 

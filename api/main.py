@@ -15,7 +15,7 @@ app.add_middleware(
 )
 
 # REGISTER ROUTES API DULU
-app.include_router(upload.router, prefix="/upload", tags=["Upload"])
+app.include_router(upload.router, tags=["Upload"])
 app.include_router(chat.router, prefix="/chat", tags=["Chat"])
 
 @app.get("/ping")

@@ -19,30 +19,51 @@ const ChatHandler = {
     this.elements.fastBtn = document.getElementById('fastBtn');
     this.elements.qualityBtn = document.getElementById('qualityBtn');
 
+    // Validate all required elements exist
+    const requiredElements = ['messages', 'input', 'sendBtn'];
+    for (const key of requiredElements) {
+      if (!this.elements[key]) {
+        console.error(`❌ Required element '${key}' not found. Chat functionality disabled.`);
+        return;
+      }
+    }
+
     this.attachEvents();
   },
 
   attachEvents() {
+    if (!this.elements.sendBtn) {
+      console.error('❌ sendBtn element not found');
+      return;
+    }
     this.elements.sendBtn.addEventListener('click', () => this.sendMessage());
 
-    this.elements.input.addEventListener('keypress', (e) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
-        e.preventDefault();
-        this.sendMessage();
-      }
-    });
+    if (this.elements.input) {
+      this.elements.input.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          this.sendMessage();
+        }
+      });
 
-    this.elements.input.addEventListener('input', function () {
-      this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
-    });
+      this.elements.input.addEventListener('input', function () {
+        this.style.height = 'auto';
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+      });
+    }
 
-    this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
-    this.elements.qualityBtn.addEventListener('click', () => this.setMode('quality'));
+    if (this.elements.fastBtn) {
+      this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
+    }
+    if (this.elements.qualityBtn) {
+      this.elements.qualityBtn.addEventListener('click', () => this.setMode('quality'));
+    }
 
-    this.elements.messages.addEventListener('click', () => {
-      this.elements.input.focus();
-    });
+    if (this.elements.messages && this.elements.input) {
+      this.elements.messages.addEventListener('click', () => {
+        this.elements.input.focus();
+      });
+    }
   },
 
   setMode(mode) {

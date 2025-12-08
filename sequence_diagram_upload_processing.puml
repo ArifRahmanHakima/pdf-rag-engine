@@ -1,0 +1,37 @@
+@startuml
+
+title Sequence Diagram for PDF Upload and Processing
+
+actor User
+participant Frontend
+participant Backend
+participant Redis
+participant RAGEngine
+
+User -> Frontend: Upload PDF File
+Frontend -> Backend: POST /upload
+Backend -> Backend: Validate File (extension, size, content)
+alt Validation Fails
+    Backend -> Frontend: Return Error Response
+else Validation Succeeds
+    Backend -> Redis: Set Status "uploading"
+    Backend -> Backend: Save File to Disk
+    Backend -> Redis: Set Status "processing"
+    Backend -> Backend: Background Task - Process PDF
+    Backend -> Frontend: Return Success Response
+    Backend -> RAGEngine: Process PDF File
+    RAGEngine -> Backend: Return Summary
+    Backend -> Redis: Set Status "completed"
+    Backend -> Redis: Save Summary
+end
+
+User -> Frontend: Check Status
+Frontend -> Backend: GET /status/{filename}
+Backend -> Redis: Fetch Status
+alt Status Found
+    Backend -> Frontend: Return Status and Summary
+else Status Not Found
+    Backend -> Frontend: Return Error Response
+end
+
+@enduml
