@@ -20,6 +20,13 @@ const ChatHandler = {
     this.elements.qualityBtn = document.getElementById('qualityBtn');
 
     this.attachEvents();
+    
+    // No need to load session here - handled by UIHandler.restoreSession()
+  },
+
+  loadSession() {
+    // Legacy method - now handled by UIHandler.restoreSession()
+    console.log('ℹ️ loadSession() called - session restore handled by backend');
   },
 
   attachEvents() {
@@ -86,7 +93,8 @@ const ChatHandler = {
       const response = await fetch(`${CONFIG.API_BASE_URL}/chat/send?${params.toString()}`, {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/json'
+          'Content-Type': 'application/json',
+          'X-Session-Id': STATE.sessionId  // Send session ID
         }
       });
 
@@ -98,6 +106,7 @@ const ChatHandler = {
 
       if (data.chat_id) {
         STATE.chatId = data.chat_id;
+        console.log('💬 Chat ID:', data.chat_id);
       }
 
       this.removeBotLoadingBubble();
@@ -105,6 +114,9 @@ const ChatHandler = {
       if (data.answer) {
         await Utils.sleep(300);
         this.addMessage('bot', data.answer);
+        
+        // Save bot message to IndexedDB CDN
+        await StorageManager.addChatMessage(STATE.sessionId, 'bot', data.answer);
       } else {
         throw new Error('Tidak ada jawaban dari server');
       }
@@ -140,6 +152,13 @@ const ChatHandler = {
     this.elements.messages.appendChild(message);
 
     this.scrollToBottom();
+    
+    // Save user message to IndexedDB CDN (bot messages saved in sendMessage)
+    if (role === 'user') {
+      StorageManager.addChatMessage(STATE.sessionId, 'user', text).catch(err => {
+        console.error('Failed to save message to IndexedDB:', err);
+      });
+    }
   },
 
   // ✅ TAMBAHAN: animasi bubble loading bot

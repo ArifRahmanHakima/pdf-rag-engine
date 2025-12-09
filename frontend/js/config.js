@@ -17,6 +17,7 @@ const CONFIG = {
 
 // Global state
 const STATE = {
+  sessionId: null,  // Redis session ID
   chatId: null,
   docId: "doc001",
   userId: "user123",
@@ -28,6 +29,20 @@ const STATE = {
   scale: CONFIG.DEFAULT_SCALE,
   isMobile: window.innerWidth <= 768
 };
+
+// Initialize or get session ID
+function getSessionId() {
+  let sessionId = sessionStorage.getItem('session_id');
+  if (!sessionId) {
+    sessionId = 'sess_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+    sessionStorage.setItem('session_id', sessionId);
+    console.log('🆕 New session created:', sessionId);
+  } else {
+    console.log('📋 Existing session:', sessionId);
+  }
+  STATE.sessionId = sessionId;
+  return sessionId;
+}
 
 // Configure PDF.js
 if (typeof pdfjsLib !== 'undefined') {

@@ -1,19 +1,30 @@
 // ============= MAIN APP INITIALIZATION =============
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   console.log('🚀 Initializing ChatPDF...');
   
   try {
+    // Initialize IndexedDB storage first
+    await StorageManager.init();
+    console.log('💾 IndexedDB CDN initialized');
+    
     // Initialize all modules in order
     UIHandler.init();
     PDFHandler.init();
     ChatHandler.init();
+    
+    // Cleanup old data (older than 7 days)
+    StorageManager.clearOldData();
+    
+    // Show storage info
+    StorageManager.getStorageInfo();
     
     console.log('✅ ChatPDF initialized successfully');
     console.log('📊 Configuration:', {
       maxFileSize: Utils.formatFileSize(CONFIG.MAX_FILE_SIZE),
       defaultScale: CONFIG.DEFAULT_SCALE,
       userId: STATE.userId,
-      docId: STATE.docId
+      docId: STATE.docId,
+      sessionId: STATE.sessionId
     });
     
     // Check if PDF.js is loaded

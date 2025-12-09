@@ -12,8 +12,39 @@ redis_client = redis.Redis(
     decode_responses=True
 )
 
+SESSION_TTL = 86400  # 24 hours
 
-# ============ Redis Chat Memory =============
+# ============ Redis Session Management =============
+
+def save_session_data(session_id: str, data: dict):
+    """Save complete session data (PDF info + chat history)"""
+    key = f"session:{session_id}"
+    redis_client.set(key, json.dumps(data), ex=SESSION_TTL)
+    
+def get_session_data(session_id: str):
+    """Get complete session data"""
+    key = f"session:{session_id}"
+    data_json = redis_client.get(key)
+    return json.loads(data_json) if data_json else None
+
+def update_session_pdf(session_id: str, doc_id: str, pdf_name: str, pdf_url: str):
+    """Update PDF info in session"""
+    session = get_session_data(session_id) or {}
+    session['doc_id'] = doc_id
+    session['pdf_name'] = pdf_name
+    session['pdf_url'] = pdf_url
+    session['chat_history'] = session.get('chat_history', [])
+    save_session_data(session_id, session)
+    
+def add_session_message(session_id: str, role: str, content: str):
+    """Add message to session chat history"""
+    session = get_session_data(session_id) or {'chat_history': []}
+    if 'chat_history' not in session:
+        session['chat_history'] = []
+    session['chat_history'].append({'role': role, 'content': content})
+    save_session_data(session_id, session)
+
+# ============ Redis Chat Memory (Legacy) =============
 
 def get_chat_history(chat_id: str):
     key = f"chat:{chat_id}"
@@ -24,7 +55,7 @@ def save_message_redis(chat_id: str, role: str, content: str):
     key = f"chat:{chat_id}"
     history = get_chat_history(chat_id)
     history.append({"role": role, "content": content})
-    redis_client.set(key, json.dumps(history))
+    redis_client.set(key, json.dumps(history), ex=SESSION_TTL)
 
 # ============ Postgres Persistent Chat =============
 

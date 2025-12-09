@@ -31,8 +31,137 @@ const UIHandler = {
     this.elements.chatColumn = document.getElementById('chatColumn');
     this.elements.resizer = document.getElementById('resizer');
 
+    // Initialize session
+    getSessionId();
+
     this.attachEvents();
     this.checkMobile();
+    
+    // Restore session from backend
+    this.restoreSession();
+  },
+
+  async restoreSession() {
+    const sessionId = STATE.sessionId;
+    
+    console.log('🔄 Restoring session from IndexedDB CDN:', sessionId);
+    
+    try {
+      // Try to get session from IndexedDB first (CDN)
+      const session = await StorageManager.getSession(sessionId);
+      
+      if (session && session.docId) {
+        console.log('✅ Session found in IndexedDB:', session);
+        
+        STATE.docId = session.docId;
+        STATE.currentPdfName = session.filename;
+        
+        // Switch to chat interface
+        this.elements.welcomeScreen.style.display = 'none';
+        this.elements.chatInterface.classList.add('active');
+        
+        // Update title
+        this.elements.chatTitle.textContent = `📄 ${session.filename}`;
+        
+        // Add to chat list
+        this.addToChatList(session.filename);
+        
+        // Try to load PDF from IndexedDB first
+        const pdfData = await StorageManager.getPDF(session.docId);
+        
+        if (pdfData && pdfData.blob) {
+          console.log('📄 Loading PDF from IndexedDB CDN');
+          await PDFHandler.loadPDF(pdfData.blob);
+        } else if (session.pdfUrl) {
+          // Fallback to backend URL
+          const fullUrl = `${CONFIG.API_BASE_URL}${session.pdfUrl}`;
+          console.log('🌐 Loading PDF from backend:', fullUrl);
+          await PDFHandler.loadPDF(fullUrl);
+        }
+        
+        // Restore chat history from IndexedDB
+        const chatHistory = await StorageManager.getChatHistory(sessionId);
+        if (chatHistory && chatHistory.length > 0) {
+          console.log(`💬 Restoring ${chatHistory.length} messages from IndexedDB`);
+          ChatHandler.clearMessages();
+          
+          for (const msg of chatHistory) {
+            ChatHandler.addMessage(msg.role, msg.content);
+          }
+        }
+        
+        // Enable input
+        ChatHandler.enableInput(true);
+        
+        console.log('✅ Session restored from IndexedDB CDN!');
+        return;
+      }
+      
+      // If not in IndexedDB, try backend
+      console.log('ℹ️ Session not in IndexedDB, trying backend...');
+      const response = await fetch(`${CONFIG.API_BASE_URL}/session/${sessionId}`);
+      const data = await response.json();
+      
+      if (data.status === 'success' && data.session) {
+        const backendSession = data.session;
+        console.log('✅ Session found in Redis backend:', backendSession);
+        
+        if (backendSession.pdf_name && backendSession.pdf_url) {
+          // Save to IndexedDB for next time
+          await StorageManager.saveSession({
+            sessionId: sessionId,
+            docId: backendSession.doc_id,
+            filename: backendSession.pdf_name,
+            pdfUrl: backendSession.pdf_url
+          });
+          
+          STATE.docId = backendSession.doc_id;
+          STATE.currentPdfName = backendSession.pdf_name;
+          
+          // Switch to chat interface
+          this.elements.welcomeScreen.style.display = 'none';
+          this.elements.chatInterface.classList.add('active');
+          
+          // Update title
+          this.elements.chatTitle.textContent = `📄 ${backendSession.pdf_name}`;
+          
+          // Add to chat list
+          this.addToChatList(backendSession.pdf_name);
+          
+          // Load PDF from backend
+          const fullUrl = `${CONFIG.API_BASE_URL}${backendSession.pdf_url}`;
+          console.log('🌐 Loading PDF from backend:', fullUrl);
+          await PDFHandler.loadPDF(fullUrl);
+          
+          // Restore chat history
+          if (backendSession.chat_history && backendSession.chat_history.length > 0) {
+            console.log(`💬 Restoring ${backendSession.chat_history.length} messages`);
+            ChatHandler.clearMessages();
+            
+            // Save to IndexedDB
+            await StorageManager.saveChatHistory(sessionId, backendSession.chat_history);
+            
+            for (const msg of backendSession.chat_history) {
+              ChatHandler.addMessage(msg.role, msg.content);
+            }
+          }
+          
+          // Enable input
+          ChatHandler.enableInput(true);
+          
+          console.log('✅ Session restored from backend and cached to IndexedDB!');
+        }
+      } else {
+        console.log('ℹ️ No saved session found');
+      }
+    } catch (error) {
+      console.error('❌ Error restoring session:', error);
+    }
+  },
+
+  restoreUIState() {
+    // Legacy method - now using restoreSession()
+    console.log('ℹ️ restoreUIState() called - using restoreSession() instead');
   },
 
   attachEvents() {
@@ -167,9 +296,34 @@ const UIHandler = {
       // Load PDF for viewing
       await PDFHandler.loadPDF(file);
       
+      // Save PDF to IndexedDB CDN immediately
+      const docId = 'doc_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
+      STATE.docId = docId;
+      
+      await StorageManager.savePDF({
+        docId: docId,
+        filename: file.name,
+        blob: file,
+        url: null,
+        timestamp: Date.now()
+      });
+      
+      // Save session to IndexedDB
+      await StorageManager.saveSession({
+        sessionId: STATE.sessionId,
+        docId: docId,
+        filename: file.name,
+        pdfUrl: null
+      });
+      
+      console.log('💾 PDF and session saved to IndexedDB CDN');
+      
       // Add welcome message
       const welcomeMsg = `Halo! Saya sudah membaca dokumen "${file.name}". File berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
       ChatHandler.addMessage('bot', welcomeMsg);
+      
+      // Save welcome message to IndexedDB
+      await StorageManager.addChatMessage(STATE.sessionId, 'bot', welcomeMsg);
       
       // Enable input
       ChatHandler.enableInput(true);
@@ -195,6 +349,9 @@ const UIHandler = {
       
       const response = await fetch(`${CONFIG.API_BASE_URL}/upload`, {
         method: 'POST',
+        headers: {
+          'X-Session-Id': STATE.sessionId  // Send session ID
+        },
         body: formData
       });
       
@@ -210,6 +367,7 @@ const UIHandler = {
         // Update doc ID if provided
         if (data.doc_id) {
           STATE.docId = data.doc_id;
+          console.log('💾 Session saved to Redis:', STATE.sessionId);
         }
         
         STATE.chatId = null;

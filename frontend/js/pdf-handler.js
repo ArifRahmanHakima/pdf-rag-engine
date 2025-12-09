@@ -62,41 +62,71 @@ const PDFHandler = {
     });
   },
 
-  async loadPDF(file) {
+  async loadPDF(source) {
     this.showLoading(true);
     
-    const fileReader = new FileReader();
-    
-    return new Promise((resolve, reject) => {
-      fileReader.onload = async () => {
-        try {
-          const typedarray = new Uint8Array(fileReader.result);
-          STATE.pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
-          
-          this.elements.pageInput.max = STATE.pdfDoc.numPages;
-          this.updatePageInfo();
-          
-          // Reset to first page and default scale
-          STATE.pageNum = 1;
-          STATE.scale = CONFIG.DEFAULT_SCALE;
-          
-          await this.renderPage(STATE.pageNum);
-          this.showLoading(false);
-          resolve();
-        } catch (error) {
-          console.error('Error loading PDF:', error);
-          this.showLoading(false);
-          reject(error);
-        }
-      };
+    try {
+      // Check if source is a File object or URL string
+      if (source instanceof File) {
+        // Load from File object
+        console.log('📄 Loading PDF from File object:', source.name);
+        const fileReader = new FileReader();
+        
+        return new Promise((resolve, reject) => {
+          fileReader.onload = async () => {
+            try {
+              const typedarray = new Uint8Array(fileReader.result);
+              STATE.pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
+              
+              this.elements.pageInput.max = STATE.pdfDoc.numPages;
+              this.updatePageInfo();
+              
+              // Reset to first page and default scale
+              STATE.pageNum = 1;
+              STATE.scale = CONFIG.DEFAULT_SCALE;
+              
+              await this.renderPage(STATE.pageNum);
+              this.showLoading(false);
+              resolve();
+            } catch (error) {
+              console.error('❌ Error loading PDF from File:', error);
+              this.showLoading(false);
+              reject(error);
+            }
+          };
 
-      fileReader.onerror = () => {
+          fileReader.onerror = () => {
+            this.showLoading(false);
+            reject(new Error('Failed to read file'));
+          };
+          
+          fileReader.readAsArrayBuffer(source);
+        });
+      } else if (typeof source === 'string') {
+        // Load from URL
+        console.log('🌐 Loading PDF from URL:', source);
+        
+        STATE.pdfDoc = await pdfjsLib.getDocument(source).promise;
+        
+        this.elements.pageInput.max = STATE.pdfDoc.numPages;
+        this.updatePageInfo();
+        
+        // Reset to first page and default scale
+        STATE.pageNum = 1;
+        STATE.scale = CONFIG.DEFAULT_SCALE;
+        
+        await this.renderPage(STATE.pageNum);
         this.showLoading(false);
-        reject(new Error('Failed to read file'));
-      };
-      
-      fileReader.readAsArrayBuffer(file);
-    });
+        
+        console.log('✅ PDF loaded from URL successfully');
+      } else {
+        throw new Error('Invalid source type. Must be File or URL string.');
+      }
+    } catch (error) {
+      console.error('❌ Error loading PDF:', error);
+      this.showLoading(false);
+      throw error;
+    }
   },
 
   async renderPage(num) {
