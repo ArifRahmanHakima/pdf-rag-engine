@@ -130,7 +130,7 @@ const ChatHandler = {
     }
   },
 
-  addMessage(role, text) {
+  addMessage(role, text, skipSave = false) {
     const message = document.createElement('div');
     message.className = `message ${role}-message`;
 
@@ -153,8 +153,8 @@ const ChatHandler = {
 
     this.scrollToBottom();
     
-    // Save user message to IndexedDB CDN (bot messages saved in sendMessage)
-    if (role === 'user') {
+    // Save user message to IndexedDB CDN only if not restoring
+    if (role === 'user' && !skipSave) {
       StorageManager.addChatMessage(STATE.sessionId, 'user', text).catch(err => {
         console.error('Failed to save message to IndexedDB:', err);
       });

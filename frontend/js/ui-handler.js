@@ -86,7 +86,8 @@ const UIHandler = {
           ChatHandler.clearMessages();
           
           for (const msg of chatHistory) {
-            ChatHandler.addMessage(msg.role, msg.content);
+            // Use skipSave=true to prevent re-saving during restore
+            ChatHandler.addMessage(msg.role, msg.content, true);
           }
         }
         
@@ -142,7 +143,8 @@ const UIHandler = {
             await StorageManager.saveChatHistory(sessionId, backendSession.chat_history);
             
             for (const msg of backendSession.chat_history) {
-              ChatHandler.addMessage(msg.role, msg.content);
+              // Use skipSave=true to prevent re-saving during restore
+              ChatHandler.addMessage(msg.role, msg.content, true);
             }
           }
           
