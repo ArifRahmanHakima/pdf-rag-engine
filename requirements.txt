@@ -1,0 +1,23 @@
+# Core Dependencies
+python-dotenv>=1.0.0
+
+# Embedding & RAG
+sentence-transformers>=2.2.0
+lightrag-hku>=0.1.0
+numpy>=1.24.0
+
+# PDF Processing
+pdf2image>=1.17.0
+Pillow>=10.0.0
+
+# OCR
+easyocr>=1.7.0
+
+# Progress tracking
+tqdm>=4.66.0
+
+# LLM Integration
+openai>=1.3.0
+
+# Deep Learning (required by easyocr and sentence-transformers)
+torch>=2.0.0
