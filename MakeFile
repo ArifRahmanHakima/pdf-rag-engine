@@ -9,3 +9,9 @@ uvicorn api.main:app --reload:
 Remove-Items -Path .\data\* -Recurse -Force:
 	Remove-Item uploads -Recurse -Force
 	Remove-Item rag_Storage -Recurse -Force
+
+Activate-Dev-Environment:
+    .\venv\Scripts\Activate.ps1
+
+Check-Env-Variables:
+python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('LLM_MODEL:', os.getenv('LLM_MODEL')); print('API_KEY:', os.getenv('GOOGLE_API_KEY')[:20]+'...' if os.getenv('GOOGLE_API_KEY') else 'NOT FOUND')"

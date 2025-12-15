@@ -35,8 +35,12 @@ const ChatHandler = {
       this.style.height = Math.min(this.scrollHeight, 120) + 'px';
     });
 
-    this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
-    this.elements.qualityBtn.addEventListener('click', () => this.setMode('quality'));
+    if (this.elements.fastBtn) {
+      this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
+    }
+    if (this.elements.qualityBtn) {
+      this.elements.qualityBtn.addEventListener('click', () => this.setMode('quality'));
+    }
 
     this.elements.messages.addEventListener('click', () => {
       this.elements.input.focus();

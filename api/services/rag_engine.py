@@ -44,12 +44,11 @@ def get_rag_instance(doc_id: str):
         os.makedirs(doc_working_dir, exist_ok=True)
         
         config = RAGAnythingConfig(
-            working_dir=doc_working_dir,
             parser="mineru",
             parse_method="auto",
-            enable_image_processing=True,
-            enable_table_processing=True,
-            enable_equation_processing=True,
+            enable_image_processing=False,    # ❌ Matikan
+            enable_table_processing=False,    # ❌ Matikan  
+            enable_equation_processing=False, # ❌ Matikan
         )
         
         rag_instances[doc_id] = RAGAnything(
