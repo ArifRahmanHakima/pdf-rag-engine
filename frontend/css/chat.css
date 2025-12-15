@@ -216,8 +216,8 @@
 .input-container {
   position: relative;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
+  align-items: center;
+  gap: 10px;
   margin-bottom: 12px;
 }
 
@@ -242,6 +242,7 @@
 .send-btn {
   position: absolute;
   right: 8px;
+  top: 8%;
   bottom: 6px;
   width: 36px;
   height: 36px;

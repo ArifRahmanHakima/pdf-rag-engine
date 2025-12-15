@@ -4,8 +4,8 @@ from lightrag.llm.openai import openai_complete_if_cache
 
 load_dotenv()
 
-API_KEY = os.getenv("OPENROUTER_API_KEY")
-BASE_URL = os.getenv("OPENROUTER_BASE_URL")
+API_KEY = os.getenv("GROQ_API_KEY")
+BASE_URL = os.getenv("GROQ_BASE_URL")
 LLM_MODEL = os.getenv("LLM_MODEL")
 VISION_MODEL = os.getenv("VISION_MODEL")
 MAX_INPUT = int(os.getenv("MAX_INPUT_TOKENS", 800))
