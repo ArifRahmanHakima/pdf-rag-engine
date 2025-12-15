@@ -23,7 +23,7 @@ def load_embedding_model():
     if embedding_model is None and QWEN_AVAILABLE:
         print("[*] Loading Qwen embedding model...")
         embedding_model = SentenceTransformer("Qwen/Qwen3-embedding-0.6B")
-        print("[✓] Qwen embedding model loaded\n")
+        print("[OK] Qwen embedding model loaded\n")
     return embedding_model
 
 async def batch_embed_texts(texts, batch_size=1):

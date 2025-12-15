@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>RAG Chatbot - ChatPDF Style</title>
+    <link rel="stylesheet" href="/static/css/style.css?v=2">
+</head>
+<body>
+    <div class="container">
+        <!-- Left Sidebar: PDF History -->
+        <div class="sidebar sidebar-left">
+            <div class="sidebar-header">
+                <h2>📚 Documents</h2>
+                <button class="btn-upload" id="uploadBtn">
+                    <span>+ Upload PDF</span>
+                </button>
+                <input type="file" id="fileInput" accept=".pdf" style="display: none;">
+            </div>
+
+            <div class="sidebar-content">
+                <div id="sessionsList" class="sessions-list">
+                    <div class="empty-state">
+                        <p>No PDFs uploaded yet</p>
+                    </div>
+                </div>
+                
+                <!-- Documents in current session (shown when selected) -->
+                <div id="documentsList" class="documents-list" style="display: none; margin-top: 15px; padding-top: 15px; border-top: 1px solid #e0e0e0;">
+                    <p style="font-size: 12px; color: #999; margin-bottom: 10px; font-weight: 600;">📄 Documents in Session:</p>
+                    <div id="docsContainer"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Center: PDF Viewer -->
+        <div class="viewer-container">
+            <div class="viewer-header">
+                <h1 id="currentPdfName">Select a PDF</h1>
+                <div class="viewer-actions">
+                    <button id="deleteBtn" class="btn-icon btn-danger" title="Delete PDF">
+                        🗑️
+                    </button>
+                </div>
+            </div>
+
+            <div class="pdf-viewer" id="pdfViewer">
+                <div class="empty-state">
+                    <div class="icon">📄</div>
+                    <h3>No PDF selected</h3>
+                    <p>Upload a PDF to start chatting</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right Sidebar: Chat Interface -->
+        <div class="sidebar sidebar-right">
+            <div class="chat-header">
+                <h2>💬 Chat</h2>
+                <span class="status-indicator" id="statusIndicator">ready</span>
+            </div>
+
+            <div class="chat-messages" id="chatMessages">
+                <div class="empty-state">
+                    <p>Select a PDF and start asking questions</p>
+                </div>
+            </div>
+
+            <div class="chat-input-container">
+                <input
+                    type="text"
+                    id="chatInput"
+                    class="chat-input"
+                    placeholder="Ask a question about the PDF..."
+                    disabled
+                >
+                <button id="sendBtn" class="btn-send" disabled>
+                    Send
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Upload Modal -->
+    <div id="uploadModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Upload PDF</h2>
+                <button class="modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="upload-area" id="uploadArea">
+                    <input type="file" id="fileInputModal" accept=".pdf" style="display: none;">
+                    <div class="upload-placeholder">
+                        <div class="upload-icon">📤</div>
+                        <p>Drag and drop PDF here</p>
+                        <p style="font-size: 12px; color: #666;">or click to browse</p>
+                    </div>
+                </div>
+                <div id="uploadProgress" style="display: none;">
+                    <div class="progress-bar">
+                        <div class="progress-fill"></div>
+                    </div>
+                    <p id="uploadStatus">Uploading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading Spinner -->
+    <div id="loadingSpinner" class="loading-spinner" style="display: none;">
+        <div class="spinner"></div>
+        <p>Processing...</p>
+    </div>
+
+    <script src="/static/js/app.js?v=2"></script>
+</body>
+</html>
