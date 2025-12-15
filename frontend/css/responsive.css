@@ -1,3 +1,45 @@
+/* ============= MOBILE VIEW TOGGLE BUTTONS ============= */
+.mobile-view-toggle {
+  display: none;
+  position: fixed;
+  bottom: 100px;
+  right: 20px;
+  z-index: 60;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.view-toggle-btn {
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+  color: white;
+  font-size: 20px;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(124, 58, 237, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.3s ease;
+}
+
+.view-toggle-btn:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 20px rgba(124, 58, 237, 0.5);
+}
+
+.view-toggle-btn.active {
+  background: #1f2937;
+}
+
+.view-toggle-btn svg {
+  width: 24px;
+  height: 24px;
+}
+
+/* ============= TABLET & SMALL DESKTOP (1024px) ============= */
 @media (max-width: 1024px) {
   .sidebar {
     position: fixed;
@@ -7,6 +49,7 @@
     z-index: 50;
     box-shadow: 2px 0 10px rgba(0,0,0,0.1);
     transition: transform 0.3s ease;
+    background: white;
   }
   
   .sidebar.active {
@@ -23,28 +66,101 @@
   
   .upload-box {
     max-width: 600px;
+    width: 90%;
+  }
+  
+  .pdf-viewer-column {
+    width: 45%;
+    min-width: 280px;
+  }
+  
+  .chat-column {
+    min-width: 320px;
   }
 }
 
+/* ============= TABLET (768px - 1024px) ============= */
+@media (max-width: 900px) {
+  .chat-layout {
+    flex-direction: column;
+    position: relative;
+  }
+  
+  .pdf-viewer-column {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    width: 100% !important;
+    min-width: 100%;
+    z-index: 5;
+    display: none;
+    border-right: none;
+  }
+  
+  .pdf-viewer-column.mobile-active {
+    display: flex;
+  }
+  
+  .chat-column {
+    width: 100% !important;
+    min-width: 100%;
+    z-index: 10;
+    display: none;
+  }
+  
+  .chat-column.mobile-active {
+    display: flex;
+  }
+  
+  .resizer {
+    display: none;
+  }
+  
+  .mobile-view-toggle {
+    display: flex;
+  }
+  
+  .pdf-viewer-header {
+    justify-content: center;
+    padding: 10px 12px;
+    gap: 6px;
+  }
+  
+  .pdf-nav-btn, .pdf-zoom-btn {
+    padding: 4px 8px;
+    min-width: 32px;
+    height: 32px;
+    font-size: 14px;
+  }
+  
+  #pageInput {
+    width: 50px;
+    padding: 4px;
+  }
+  
+  .chat-header {
+    padding: 12px 16px;
+  }
+  
+  .chat-header h2 {
+    font-size: 14px;
+  }
+}
+
+/* ============= MOBILE (768px) ============= */
 @media (max-width: 768px) {
   .header-btn span {
     display: none;
   }
   
+  .header-btn {
+    padding: 8px 12px;
+  }
+  
   .logo-text-header {
     display: none;
-  }
-  
-  .pdf-viewer-column {
-    display: none !important;
-  }
-  
-  .resizer {
-    display: none !important;
-  }
-  
-  .chat-column {
-    width: 100% !important;
   }
   
   .welcome-title {
@@ -53,6 +169,7 @@
   
   .welcome-subtitle {
     font-size: 16px;
+    padding: 0 20px;
   }
   
   .bot-message, .user-message {
@@ -60,7 +177,8 @@
   }
   
   .upload-box {
-    padding: 60px 20px;
+    padding: 50px 20px;
+    width: 95%;
   }
   
   .upload-icon-large svg {
@@ -76,43 +194,185 @@
     padding: 12px 24px;
     font-size: 14px;
   }
-}
-
-@media (max-width: 480px) {
+  
   .chat-messages {
     padding: 16px;
   }
   
+  .message-content {
+    font-size: 14px;
+    padding: 10px 14px;
+  }
+  
+  .message-avatar {
+    width: 32px;
+    height: 32px;
+    font-size: 16px;
+  }
+  
   .chat-input-area {
-    padding: 12px;
+    padding: 12px 16px;
   }
   
-  .top-header {
-    padding: 0 12px;
+  #chatInput {
+    font-size: 16px; /* Prevents zoom on iOS */
+    padding: 10px 44px 10px 14px;
   }
   
-  .welcome-title {
-    font-size: 28px;
+  .send-btn {
+    width: 32px;
+    height: 32px;
+    right: 6px;
+    bottom: 6px;
   }
   
-  .upload-box {
-    padding: 40px 16px;
+  .processing-indicator {
+    margin: 16px;
+    padding: 16px;
   }
   
   .process-step {
-    padding: 8px;
+    padding: 10px;
+  }
+  
+  .step-icon {
+    font-size: 20px;
   }
   
   .step-text {
     font-size: 13px;
   }
   
-  .step-progress {
-    width: 60px;
+  .mobile-view-toggle {
+    bottom: 90px;
+    right: 16px;
+  }
+  
+  .view-toggle-btn {
+    width: 46px;
+    height: 46px;
   }
 }
 
-/* Overlay untuk sidebar mobile */
+/* ============= SMALL MOBILE (480px) ============= */
+@media (max-width: 480px) {
+  .top-header {
+    padding: 0 12px;
+    height: 56px;
+  }
+  
+  .main-container {
+    margin-top: 56px;
+    height: calc(100vh - 56px);
+  }
+  
+  .sidebar {
+    top: 56px;
+    height: calc(100vh - 56px);
+    width: 260px;
+    left: -260px;
+  }
+  
+  .sidebar.active {
+    transform: translateX(260px);
+  }
+  
+  .welcome-screen {
+    padding: 20px;
+  }
+  
+  .welcome-title {
+    font-size: 28px;
+  }
+  
+  .welcome-subtitle {
+    font-size: 14px;
+    margin-bottom: 40px;
+  }
+  
+  .upload-box {
+    padding: 40px 16px;
+  }
+  
+  .upload-icon-large svg {
+    width: 40px;
+    height: 40px;
+  }
+  
+  .upload-text {
+    font-size: 14px;
+    margin-bottom: 16px;
+  }
+  
+  .upload-btn-large {
+    padding: 10px 20px;
+    font-size: 13px;
+  }
+  
+  .chat-messages {
+    padding: 12px;
+    gap: 12px;
+  }
+  
+  .message {
+    gap: 8px;
+  }
+  
+  .message-content {
+    font-size: 13px;
+    padding: 10px 12px;
+  }
+  
+  .message-avatar {
+    width: 28px;
+    height: 28px;
+    font-size: 14px;
+  }
+  
+  .chat-input-area {
+    padding: 10px 12px;
+  }
+  
+  .mobile-view-toggle {
+    bottom: 80px;
+    right: 12px;
+  }
+  
+  .view-toggle-btn {
+    width: 42px;
+    height: 42px;
+    font-size: 18px;
+  }
+  
+  .pdf-canvas-container {
+    padding: 10px;
+  }
+  
+  .pdf-viewer-header {
+    padding: 8px 10px;
+    gap: 4px;
+  }
+  
+  .pdf-nav-btn, .pdf-zoom-btn {
+    padding: 4px 6px;
+    min-width: 28px;
+    height: 28px;
+    font-size: 12px;
+  }
+  
+  #pageInput {
+    width: 40px;
+    padding: 2px;
+    font-size: 12px;
+  }
+  
+  #pageInfo {
+    font-size: 11px;
+    padding: 0 4px;
+  }
+}
+
+/* ============= OVERLAY FOR SIDEBAR ============= */
 .sidebar-overlay {
   display: none;
   position: fixed;
@@ -122,14 +382,100 @@
   bottom: 0;
   background: rgba(0, 0, 0, 0.5);
   z-index: 49;
+  opacity: 0;
+  transition: opacity 0.3s ease;
 }
 
-.sidebar.active + .sidebar-overlay {
+.sidebar-overlay.active {
   display: block;
+  opacity: 1;
+}
+
+@media (max-width: 480px) {
+  .sidebar-overlay {
+    top: 56px;
+  }
 }
 
 @media (min-width: 1025px) {
   .sidebar-overlay {
     display: none !important;
+  }
+}
+
+/* ============= LANDSCAPE MOBILE ============= */
+@media (max-height: 500px) and (orientation: landscape) {
+  .welcome-screen {
+    padding: 20px;
+  }
+  
+  .welcome-title {
+    font-size: 28px;
+    margin-bottom: 10px;
+  }
+  
+  .welcome-subtitle {
+    font-size: 14px;
+    margin-bottom: 20px;
+  }
+  
+  .upload-box {
+    padding: 30px 20px;
+  }
+  
+  .upload-icon-large svg {
+    width: 36px;
+    height: 36px;
+  }
+  
+  .upload-text {
+    margin-bottom: 12px;
+  }
+  
+  .mobile-view-toggle {
+    bottom: 70px;
+    flex-direction: row;
+    right: 50%;
+    transform: translateX(50%);
+  }
+}
+
+/* ============= SAFE AREA INSETS FOR NOTCHED DEVICES ============= */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .chat-input-area {
+    padding-bottom: calc(12px + env(safe-area-inset-bottom));
+  }
+  
+  .mobile-view-toggle {
+    bottom: calc(90px + env(safe-area-inset-bottom));
+  }
+  
+  @media (max-width: 480px) {
+    .chat-input-area {
+      padding-bottom: calc(10px + env(safe-area-inset-bottom));
+    }
+    
+    .mobile-view-toggle {
+      bottom: calc(80px + env(safe-area-inset-bottom));
+    }
+  }
+}
+
+/* ============= PRINT STYLES ============= */
+@media print {
+  .sidebar,
+  .top-header,
+  .mobile-view-toggle,
+  .chat-input-area,
+  .pdf-viewer-column {
+    display: none !important;
+  }
+  
+  .main-container {
+    margin-top: 0;
+  }
+  
+  .chat-messages {
+    overflow: visible;
   }
 }

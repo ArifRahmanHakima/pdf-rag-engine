@@ -5,7 +5,7 @@
   flex-direction: column;
   background: #f9fafb;
   min-width: 300px;
-  transition: width 0.3s ease;
+  transition: width 0.3s ease, opacity 0.3s ease, transform 0.3s ease;
 }
 
 .resizer {

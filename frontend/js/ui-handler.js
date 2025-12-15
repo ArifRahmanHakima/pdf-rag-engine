@@ -11,7 +11,11 @@ const UIHandler = {
     chatList: null,
     pdfViewerColumn: null,
     chatColumn: null,
-    resizer: null
+    resizer: null,
+    sidebarOverlay: null,
+    mobileViewToggle: null,
+    showPdfBtn: null,
+    showChatBtn: null
   },
 
   isResizing: false,
@@ -19,6 +23,7 @@ const UIHandler = {
   startLeftWidth: 0,
   currentUploadId: null,
   progressInterval: null,
+  mobileView: 'chat', // 'chat' or 'pdf'
 
   init() {
     this.elements.sidebar = document.getElementById('sidebar');
@@ -32,6 +37,10 @@ const UIHandler = {
     this.elements.pdfViewerColumn = document.getElementById('pdfViewerColumn');
     this.elements.chatColumn = document.getElementById('chatColumn');
     this.elements.resizer = document.getElementById('resizer');
+    this.elements.sidebarOverlay = document.getElementById('sidebarOverlay');
+    this.elements.mobileViewToggle = document.getElementById('mobileViewToggle');
+    this.elements.showPdfBtn = document.getElementById('showPdfBtn');
+    this.elements.showChatBtn = document.getElementById('showChatBtn');
 
     this.attachEvents();
     this.checkMobile();
@@ -40,6 +49,9 @@ const UIHandler = {
   attachEvents() {
     // Hamburger menu
     this.elements.hamburger?.addEventListener('click', () => this.toggleSidebar());
+
+    // Sidebar overlay click to close
+    this.elements.sidebarOverlay?.addEventListener('click', () => this.closeSidebar());
 
     // Close sidebar when clicking outside on mobile
     document.addEventListener('click', (e) => {
@@ -66,6 +78,10 @@ const UIHandler = {
 
     // Resizer for PDF viewer
     this.setupResizer();
+
+    // Mobile view toggle buttons
+    this.elements.showPdfBtn?.addEventListener('click', () => this.switchMobileView('pdf'));
+    this.elements.showChatBtn?.addEventListener('click', () => this.switchMobileView('chat'));
 
     // Window resize handler
     window.addEventListener('resize', Utils.debounce(() => {
@@ -134,18 +150,49 @@ const UIHandler = {
   toggleSidebar() {
     this.elements.sidebar?.classList.toggle('active');
     this.elements.hamburger?.classList.toggle('active');
+    this.elements.sidebarOverlay?.classList.toggle('active');
   },
 
   closeSidebar() {
     this.elements.sidebar?.classList.remove('active');
     this.elements.hamburger?.classList.remove('active');
+    this.elements.sidebarOverlay?.classList.remove('active');
+  },
+
+  switchMobileView(view) {
+    this.mobileView = view;
+    
+    if (view === 'pdf') {
+      this.elements.pdfViewerColumn?.classList.add('mobile-active');
+      this.elements.chatColumn?.classList.remove('mobile-active');
+      this.elements.showPdfBtn?.classList.add('active');
+      this.elements.showChatBtn?.classList.remove('active');
+    } else {
+      this.elements.pdfViewerColumn?.classList.remove('mobile-active');
+      this.elements.chatColumn?.classList.add('mobile-active');
+      this.elements.showPdfBtn?.classList.remove('active');
+      this.elements.showChatBtn?.classList.add('active');
+    }
   },
 
   checkMobile() {
     STATE.isMobile = window.innerWidth <= 1024;
+    STATE.isTablet = window.innerWidth <= 900;
     
     if (!STATE.isMobile) {
       this.closeSidebar();
+    }
+    
+    // Reset mobile view when switching to desktop
+    if (!STATE.isTablet) {
+      this.elements.pdfViewerColumn?.classList.remove('mobile-active');
+      this.elements.chatColumn?.classList.remove('mobile-active');
+    } else {
+      // Ensure at least one view is active on mobile/tablet
+      if (!this.elements.pdfViewerColumn?.classList.contains('mobile-active') &&
+          !this.elements.chatColumn?.classList.contains('mobile-active')) {
+        this.switchMobileView('chat');
+      }
     }
   },
 
@@ -174,9 +221,6 @@ async processPDF(file) {
       ChatHandler.clearMessages();
       ChatHandler.enableInput(false);
       
-      // Add to chat list
-      this.addToChatList(file.name);
-      
       // Show processing indicator
       this.showProcessingSteps();
       
@@ -197,6 +241,15 @@ async processPDF(file) {
       // Hide processing indicator
       this.hideProcessingSteps();
       
+      // Save doc_id dari response backend
+      if (uploadResult && uploadResult.doc_id) {
+        STATE.docId = uploadResult.doc_id;
+        console.log('📄 Document ID:', STATE.docId);
+        
+        // Add to chat list with doc_id
+        this.addToChatList(file.name, uploadResult.doc_id);
+      }
+      
       // Show summary if available
       if (uploadResult && uploadResult.summary) {
         const summaryHtml = Utils.parseMarkdown(`📋 **Ringkasan Dokumen:**\n\n${uploadResult.summary}`);
@@ -206,12 +259,6 @@ async processPDF(file) {
       // Add welcome message
       const welcomeMsg = `Halo! Dokumen "${file.name}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
       ChatHandler.addMessage('bot', welcomeMsg);
-      
-      // Save doc_id dari response backend
-      if (uploadResult && uploadResult.doc_id) {
-        STATE.docId = uploadResult.doc_id;
-        console.log('📄 Document ID:', STATE.docId);
-      }
       
       // Enable input
       ChatHandler.enableInput(true);
@@ -403,7 +450,10 @@ async processPDF(file) {
     }
   },
 
-  addToChatList(fileName) {
+  // Store uploaded documents info
+  uploadedDocs: {},
+
+  addToChatList(fileName, docId = null, filePath = null) {
     // Remove active from all items
     document.querySelectorAll('.chat-item').forEach(item => {
       item.classList.remove('active');
@@ -415,16 +465,82 @@ async processPDF(file) {
     chatItem.textContent = fileName;
     chatItem.title = fileName;
     
-    // Add click handler
+    // Store doc info
+    const docInfo = {
+      fileName: fileName,
+      docId: docId || STATE.docId,
+      filePath: filePath
+    };
+    chatItem.dataset.docId = docInfo.docId;
+    chatItem.dataset.fileName = fileName;
+    
+    // Save to uploadedDocs
+    if (docInfo.docId) {
+      this.uploadedDocs[docInfo.docId] = docInfo;
+    }
+    
+    // Add click handler to switch between documents
     chatItem.addEventListener('click', () => {
-      document.querySelectorAll('.chat-item').forEach(item => {
-        item.classList.remove('active');
-      });
-      chatItem.classList.add('active');
-      this.elements.chatTitle.textContent = `📄 ${fileName}`;
+      this.switchToDocument(chatItem);
     });
     
     this.elements.chatList.prepend(chatItem);
+  },
+
+  async switchToDocument(chatItem) {
+    const docId = chatItem.dataset.docId;
+    const fileName = chatItem.dataset.fileName;
+    
+    if (!docId) {
+      console.warn('No doc_id found for this chat item');
+      return;
+    }
+    
+    // Don't switch if already active
+    if (chatItem.classList.contains('active')) {
+      return;
+    }
+    
+    console.log(`🔄 Switching to document: ${fileName} (${docId})`);
+    
+    // Update active state
+    document.querySelectorAll('.chat-item').forEach(item => {
+      item.classList.remove('active');
+    });
+    chatItem.classList.add('active');
+    
+    // Update STATE
+    STATE.docId = docId;
+    STATE.currentFileName = fileName;
+    STATE.chatId = null; // Reset chat for new document
+    
+    // Update UI
+    this.elements.chatTitle.textContent = `📄 ${fileName}`;
+    
+    // Clear previous chat messages
+    ChatHandler.clearMessages();
+    
+    // Try to load the PDF file if it exists in uploads
+    const uploadDir = 'uploads';
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/${uploadDir}/${fileName}`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await PDFHandler.loadPDF(file);
+      }
+    } catch (error) {
+      console.warn('Could not reload PDF file:', error);
+    }
+    
+    // Add welcome message for this document
+    ChatHandler.addMessage('bot', `Anda sekarang dalam sesi chat untuk dokumen "${fileName}". Silakan tanyakan apapun tentang isi dokumen ini.`);
+    ChatHandler.enableInput(true);
+    
+    // Close sidebar on mobile
+    if (STATE.isMobile) {
+      this.closeSidebar();
+    }
   },
 
   setupResizer() {

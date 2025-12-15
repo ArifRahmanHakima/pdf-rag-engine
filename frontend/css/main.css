@@ -4,14 +4,35 @@
   box-sizing: border-box;
 }
 
+html {
+  scroll-behavior: smooth;
+  -webkit-text-size-adjust: 100%;
+}
+
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: #f5f5f7;
   overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Prevent iOS zoom on input focus */
+@supports (-webkit-touch-callout: none) {
+  input, textarea, select {
+    font-size: 16px !important;
+  }
+}
+
+/* Touch action optimization */
+button, a, .clickable {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
 }
 
 .app-container {
   height: 100vh;
+  height: 100dvh; /* Dynamic viewport height for mobile browsers */
   display: flex;
   flex-direction: column;
 }
@@ -20,6 +41,7 @@ body {
   display: flex;
   margin-top: 60px;
   height: calc(100vh - 60px);
+  height: calc(100dvh - 60px);
   overflow: hidden;
 }
 
@@ -27,4 +49,37 @@ body {
   flex: 1;
   overflow: hidden;
   background: white;
+}
+
+/* Selection styles */
+::selection {
+  background: rgba(124, 58, 237, 0.2);
+  color: inherit;
+}
+
+/* Scrollbar styles */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f1f1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1a1;
+}
+
+/* Hide scrollbar on mobile for cleaner look */
+@media (max-width: 768px) {
+  ::-webkit-scrollbar {
+    width: 4px;
+  }
 }

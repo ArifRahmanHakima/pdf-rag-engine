@@ -44,6 +44,7 @@ def get_rag_instance(doc_id: str):
         os.makedirs(doc_working_dir, exist_ok=True)
         
         config = RAGAnythingConfig(
+            working_dir=doc_working_dir,      # ✅ Set working dir per dokumen!
             parser="mineru",
             parse_method="auto",
             enable_image_processing=False,    # ❌ Matikan
@@ -59,6 +60,7 @@ def get_rag_instance(doc_id: str):
         )
         
         print(f"✅ RAG instance created for doc_id: {doc_id}")
+        print(f"📂 Working directory: {doc_working_dir}")
     
     return rag_instances[doc_id]
 
@@ -160,3 +162,61 @@ def clear_document_cache(doc_id: str = None):
     else:
         rag_instances.clear()
         print("🗑️ Cleared all document caches")
+
+def clear_root_storage():
+    """Clear old storage files in root rag_storage directory (not in subdirectories)"""
+    import shutil
+    
+    base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+    
+    # Files to remove from root (these are leftover from old unified storage)
+    root_files = [
+        "graph_chunk_entity_relation.graphml",
+        "kv_store_doc_status.json",
+        "kv_store_entity_chunks.json",
+        "kv_store_full_docs.json",
+        "kv_store_full_entities.json",
+        "kv_store_full_relations.json",
+        "kv_store_llm_response_cache.json",
+        "kv_store_parse_cache.json",
+        "kv_store_relation_chunks.json",
+        "kv_store_text_chunks.json",
+        "vdb_chunks.json",
+        "vdb_entities.json",
+        "vdb_relationships.json"
+    ]
+    
+    deleted = []
+    for filename in root_files:
+        filepath = os.path.join(base_dir, filename)
+        if os.path.exists(filepath):
+            os.remove(filepath)
+            deleted.append(filename)
+            print(f"🗑️ Deleted: {filepath}")
+    
+    if deleted:
+        print(f"✅ Cleaned up {len(deleted)} old storage files from root directory")
+    else:
+        print("✅ Root storage is clean")
+    
+    return deleted
+
+def reset_all_storage():
+    """Reset all RAG storage - clear memory and delete all files"""
+    import shutil
+    
+    # Clear memory cache first
+    rag_instances.clear()
+    
+    base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+    
+    if os.path.exists(base_dir):
+        # Remove entire directory
+        shutil.rmtree(base_dir)
+        print(f"🗑️ Deleted entire storage directory: {base_dir}")
+    
+    # Recreate empty directory
+    os.makedirs(base_dir, exist_ok=True)
+    print(f"✅ Created fresh storage directory: {base_dir}")
+    
+    return True

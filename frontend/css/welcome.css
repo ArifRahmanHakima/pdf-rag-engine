@@ -6,6 +6,8 @@
   height: 100%;
   padding: 40px;
   text-align: center;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .welcome-header {
@@ -71,12 +73,14 @@
 
 .upload-box {
   width: 700px;
+  max-width: 100%;
   padding: 80px 40px;
   border: 2px dashed #d1d5db;
   border-radius: 16px;
   background: linear-gradient(180deg, #faf5ff 0%, #ffffff 100%);
   text-align: center;
   transition: all 0.3s;
+  cursor: pointer;
 }
 
 .upload-box:hover {
@@ -87,6 +91,7 @@
 .upload-icon-large {
   font-size: 64px;
   margin-bottom: 20px;
+  color: #7c3aed;
 }
 
 .upload-text {
