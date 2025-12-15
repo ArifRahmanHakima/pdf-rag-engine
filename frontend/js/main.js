@@ -8,6 +8,9 @@ document.addEventListener('DOMContentLoaded', () => {
     PDFHandler.init();
     ChatHandler.init();
     
+    // Restore session setelah semua module siap
+    UIHandler.restoreSession();
+    
     console.log('✅ ChatPDF initialized successfully');
     console.log('📊 Configuration:', {
       maxFileSize: Utils.formatFileSize(CONFIG.MAX_FILE_SIZE),

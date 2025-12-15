@@ -112,6 +112,11 @@ async sendMessage() {
         await Utils.sleep(300); // Small delay for natural feel
         const answerHtml = Utils.parseMarkdown(data.answer);
         this.addMessage('bot', answerHtml, true, true); // true untuk HTML, true untuk reveal animation
+        
+        // ✅ Simpan chat history setelah respons bot
+        if (STATE.docId && UIHandler.saveChatHistory) {
+          UIHandler.saveChatHistory();
+        }
       } else {
         throw new Error('Tidak ada jawaban dari server');
       }

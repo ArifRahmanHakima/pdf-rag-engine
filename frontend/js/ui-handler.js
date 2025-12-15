@@ -24,6 +24,156 @@ const UIHandler = {
   currentUploadId: null,
   progressInterval: null,
   mobileView: 'chat', // 'chat' or 'pdf'
+  
+  // Storage untuk chat history per dokumen
+  chatHistories: {},
+  uploadedDocs: {},
+
+  // ========== LOCAL STORAGE FUNCTIONS ==========
+  saveToLocalStorage() {
+    try {
+      const data = {
+        chatHistories: this.chatHistories,
+        uploadedDocs: this.uploadedDocs,
+        lastDocId: STATE.docId,
+        lastFileName: STATE.currentFileName
+      };
+      localStorage.setItem('pdfRagData', JSON.stringify(data));
+      console.log('💾 Data saved to localStorage:', data);
+      console.log('💾 uploadedDocs count:', Object.keys(this.uploadedDocs).length);
+      console.log('💾 chatHistories count:', Object.keys(this.chatHistories).length);
+    } catch (e) {
+      console.warn('Failed to save to localStorage:', e);
+    }
+  },
+
+  loadFromLocalStorage() {
+    try {
+      const saved = localStorage.getItem('pdfRagData');
+      console.log('📂 Raw localStorage data:', saved);
+      if (saved) {
+        const data = JSON.parse(saved);
+        this.chatHistories = data.chatHistories || {};
+        this.uploadedDocs = data.uploadedDocs || {};
+        console.log('📂 Data loaded from localStorage');
+        console.log('📂 uploadedDocs:', this.uploadedDocs);
+        console.log('📂 chatHistories keys:', Object.keys(this.chatHistories));
+        return data;
+      } else {
+        console.log('📂 No data in localStorage');
+      }
+    } catch (e) {
+      console.warn('Failed to load from localStorage:', e);
+    }
+    return null;
+  },
+
+  restoreSession() {
+    console.log('🔄 restoreSession() called');
+    const data = this.loadFromLocalStorage();
+    if (!data) {
+      console.log('📭 No saved session found');
+      return false;
+    }
+
+    // Restore sidebar dengan dokumen yang sudah diupload
+    const docs = Object.values(this.uploadedDocs);
+    console.log('📋 Documents to restore:', docs);
+    
+    if (docs.length === 0) {
+      console.log('📭 No documents to restore');
+      return false;
+    }
+
+    console.log(`🔄 Restoring ${docs.length} documents...`);
+
+    // Tambahkan semua dokumen ke sidebar
+    docs.forEach(docInfo => {
+      this.restoreDocToSidebar(docInfo);
+    });
+
+    // Restore dokumen terakhir yang aktif
+    if (data.lastDocId && this.uploadedDocs[data.lastDocId]) {
+      const lastDoc = this.uploadedDocs[data.lastDocId];
+      const chatItem = document.querySelector(`[data-doc-id="${data.lastDocId}"]`);
+      
+      console.log(`🎯 Restoring last document: ${lastDoc.fileName}`);
+      console.log('📦 Chat item found:', !!chatItem);
+      console.log('📦 Welcome screen:', this.elements.welcomeScreen);
+      console.log('📦 Chat interface:', this.elements.chatInterface);
+      
+      if (chatItem) {
+        // Set active state
+        document.querySelectorAll('.chat-item').forEach(item => item.classList.remove('active'));
+        chatItem.classList.add('active');
+        
+        // Update STATE
+        STATE.docId = data.lastDocId;
+        STATE.currentFileName = lastDoc.fileName;
+        
+        // Update UI
+        this.elements.chatTitle.textContent = `📄 ${lastDoc.fileName}`;
+        
+        // Show chat interface - gunakan class active sesuai CSS
+        if (this.elements.welcomeScreen && this.elements.chatInterface) {
+          this.elements.welcomeScreen.style.display = 'none';
+          this.elements.chatInterface.classList.add('active');
+          console.log('✅ Chat interface shown');
+        } else {
+          console.error('❌ Welcome screen or chat interface element not found!');
+        }
+        
+        // Load chat history
+        if (this.chatHistories[data.lastDocId] && ChatHandler.elements.messages) {
+          ChatHandler.elements.messages.innerHTML = this.chatHistories[data.lastDocId].html;
+          STATE.chatId = this.chatHistories[data.lastDocId].chatId;
+          console.log('✅ Chat history restored');
+        }
+        
+        // Try to load PDF
+        this.reloadPDF(lastDoc.fileName);
+        
+        ChatHandler.enableInput(true);
+        return true;
+      }
+    }
+
+    return docs.length > 0;
+  },
+
+  restoreDocToSidebar(docInfo) {
+    // Cek apakah sudah ada di sidebar
+    if (document.querySelector(`[data-doc-id="${docInfo.docId}"]`)) {
+      return;
+    }
+
+    const chatItem = document.createElement('div');
+    chatItem.className = 'chat-item';
+    chatItem.textContent = docInfo.fileName;
+    chatItem.title = docInfo.fileName;
+    chatItem.dataset.docId = docInfo.docId;
+    chatItem.dataset.fileName = docInfo.fileName;
+
+    chatItem.addEventListener('click', () => {
+      this.switchToDocument(chatItem);
+    });
+
+    this.elements.chatList.appendChild(chatItem);
+  },
+
+  async reloadPDF(fileName) {
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/uploads/${fileName}`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await PDFHandler.loadPDF(file);
+      }
+    } catch (error) {
+      console.warn('Could not reload PDF file:', error);
+    }
+  },
+  // ========== END LOCAL STORAGE FUNCTIONS ==========
 
   init() {
     this.elements.sidebar = document.getElementById('sidebar');
@@ -263,6 +413,11 @@ async processPDF(file) {
       // Enable input
       ChatHandler.enableInput(true);
       
+      // ✅ Simpan chat history untuk dokumen ini (termasuk summary)
+      if (STATE.docId) {
+        this.saveChatHistory();
+      }
+      
       this.showSuccess('PDF berhasil diproses!');
       
     } catch (error) {
@@ -450,9 +605,6 @@ async processPDF(file) {
     }
   },
 
-  // Store uploaded documents info
-  uploadedDocs: {},
-
   addToChatList(fileName, docId = null, filePath = null) {
     // Remove active from all items
     document.querySelectorAll('.chat-item').forEach(item => {
@@ -477,6 +629,8 @@ async processPDF(file) {
     // Save to uploadedDocs
     if (docInfo.docId) {
       this.uploadedDocs[docInfo.docId] = docInfo;
+      // ✅ Simpan ke localStorage
+      this.saveToLocalStorage();
     }
     
     // Add click handler to switch between documents
@@ -485,6 +639,31 @@ async processPDF(file) {
     });
     
     this.elements.chatList.prepend(chatItem);
+  },
+
+  // Simpan chat history untuk dokumen saat ini
+  saveChatHistory() {
+    if (STATE.docId && ChatHandler.elements.messages) {
+      this.chatHistories[STATE.docId] = {
+        html: ChatHandler.elements.messages.innerHTML,
+        chatId: STATE.chatId
+      };
+      console.log(`💾 Chat history saved for: ${STATE.docId}`);
+      
+      // ✅ Simpan ke localStorage
+      this.saveToLocalStorage();
+    }
+  },
+  
+  // Muat chat history untuk dokumen tertentu
+  loadChatHistory(docId) {
+    if (this.chatHistories[docId]) {
+      ChatHandler.elements.messages.innerHTML = this.chatHistories[docId].html;
+      STATE.chatId = this.chatHistories[docId].chatId;
+      console.log(`📂 Chat history loaded for: ${docId}`);
+      return true;
+    }
+    return false;
   },
 
   async switchToDocument(chatItem) {
@@ -503,6 +682,9 @@ async processPDF(file) {
     
     console.log(`🔄 Switching to document: ${fileName} (${docId})`);
     
+    // ✅ Simpan chat history dokumen saat ini sebelum pindah
+    this.saveChatHistory();
+    
     // Update active state
     document.querySelectorAll('.chat-item').forEach(item => {
       item.classList.remove('active');
@@ -510,15 +692,26 @@ async processPDF(file) {
     chatItem.classList.add('active');
     
     // Update STATE
+    const previousDocId = STATE.docId;
     STATE.docId = docId;
     STATE.currentFileName = fileName;
-    STATE.chatId = null; // Reset chat for new document
     
     // Update UI
     this.elements.chatTitle.textContent = `📄 ${fileName}`;
     
-    // Clear previous chat messages
-    ChatHandler.clearMessages();
+    // Pastikan chat interface ditampilkan
+    this.elements.welcomeScreen.style.display = 'none';
+    this.elements.chatInterface.classList.add('active');
+    
+    // ✅ Coba muat chat history yang tersimpan
+    const historyLoaded = this.loadChatHistory(docId);
+    
+    if (!historyLoaded) {
+      // Jika tidak ada history, clear dan tampilkan welcome message
+      ChatHandler.elements.messages.innerHTML = '';
+      STATE.chatId = null;
+      ChatHandler.addMessage('bot', `Anda sekarang dalam sesi chat untuk dokumen "${fileName}". Silakan tanyakan apapun tentang isi dokumen ini.`);
+    }
     
     // Try to load the PDF file if it exists in uploads
     const uploadDir = 'uploads';
@@ -533,8 +726,6 @@ async processPDF(file) {
       console.warn('Could not reload PDF file:', error);
     }
     
-    // Add welcome message for this document
-    ChatHandler.addMessage('bot', `Anda sekarang dalam sesi chat untuk dokumen "${fileName}". Silakan tanyakan apapun tentang isi dokumen ini.`);
     ChatHandler.enableInput(true);
     
     // Close sidebar on mobile

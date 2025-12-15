@@ -3,6 +3,7 @@ import asyncio
 import hashlib
 from dotenv import load_dotenv
 from raganything import RAGAnything, RAGAnythingConfig
+from lightrag import LightRAG
 from sentence_transformers import SentenceTransformer
 from lightrag.utils import EmbeddingFunc
 from api.services.llm_wrapper import llm_model_func, vision_model_func
@@ -33,6 +34,15 @@ def get_doc_id(filename: str) -> str:
     # Gunakan hash untuk ID yang konsisten
     return hashlib.md5(filename.encode()).hexdigest()[:16]
 
+def check_document_exists(doc_id: str) -> bool:
+    """Check if document has been processed before (storage exists)"""
+    base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+    doc_working_dir = os.path.join(base_dir, doc_id)
+    
+    # Check if essential files exist
+    graph_file = os.path.join(doc_working_dir, "graph_chunk_entity_relation.graphml")
+    return os.path.exists(graph_file)
+
 def get_rag_instance(doc_id: str):
     """Get or create RAG instance for specific document"""
     if doc_id not in rag_instances:
@@ -44,22 +54,45 @@ def get_rag_instance(doc_id: str):
         os.makedirs(doc_working_dir, exist_ok=True)
         
         config = RAGAnythingConfig(
-            working_dir=doc_working_dir,      # ✅ Set working dir per dokumen!
+            working_dir=doc_working_dir,
             parser="mineru",
             parse_method="auto",
-            enable_image_processing=False,    # ❌ Matikan
-            enable_table_processing=False,    # ❌ Matikan  
-            enable_equation_processing=False, # ❌ Matikan
+            enable_image_processing=False,
+            enable_table_processing=False,
+            enable_equation_processing=False,
         )
         
-        rag_instances[doc_id] = RAGAnything(
-            config=config,
-            llm_model_func=llm_model_func,
-            vision_model_func=vision_model_func,
-            embedding_func=embedding_func,
-        )
+        # Check if document was processed before
+        document_exists = check_document_exists(doc_id)
         
-        print(f"✅ RAG instance created for doc_id: {doc_id}")
+        if document_exists:
+            # Document exists, initialize with LightRAG so we can query
+            print(f"📂 Loading existing document: {doc_id}")
+            
+            lightrag_instance = LightRAG(
+                working_dir=doc_working_dir,
+                llm_model_func=llm_model_func,
+                embedding_func=embedding_func,
+            )
+            
+            rag_instances[doc_id] = RAGAnything(
+                config=config,
+                llm_model_func=llm_model_func,
+                vision_model_func=vision_model_func,
+                embedding_func=embedding_func,
+                lightrag=lightrag_instance,
+            )
+            print(f"✅ RAG instance loaded with LightRAG for doc_id: {doc_id}")
+        else:
+            # New document, create without LightRAG (will be initialized during processing)
+            rag_instances[doc_id] = RAGAnything(
+                config=config,
+                llm_model_func=llm_model_func,
+                vision_model_func=vision_model_func,
+                embedding_func=embedding_func,
+            )
+            print(f"✅ RAG instance created for doc_id: {doc_id}")
+        
         print(f"📂 Working directory: {doc_working_dir}")
     
     return rag_instances[doc_id]
@@ -90,14 +123,15 @@ async def process_pdf(file_path: str):
 async def generate_summary(file_path: str, doc_id: str):
     """Generate summary from processed PDF"""
     try:
-        print(f"📝 Generating summary for doc_id: {doc_id}")
+        filename = os.path.basename(file_path)
+        print(f"📝 Generating summary for doc_id: {doc_id} ({filename})")
         
         # Get RAG instance untuk dokumen ini
         rag = get_rag_instance(doc_id)
         
-        # Query untuk mendapatkan ringkasan
+        # Query untuk mendapatkan ringkasan - include filename untuk cache key unik
         result = await rag.aquery(
-            "Berikan ringkasan singkat tentang isi dokumen ini dalam 3-4 kalimat. Jelaskan topik utama dan poin-poin penting yang dibahas.",
+            f"Berikan ringkasan singkat tentang isi dokumen '{filename}' ini dalam 3-4 kalimat. Jelaskan topik utama dan poin-poin penting yang dibahas dalam dokumen ini.",
             mode="hybrid",
             top_k=5
         )
@@ -106,7 +140,7 @@ async def generate_summary(file_path: str, doc_id: str):
         
         # Jika summary kosong atau terlalu pendek, buat fallback
         if not summary or len(summary) < 50:
-            summary = f"Dokumen {os.path.basename(file_path)} telah berhasil diproses dan siap untuk ditanyakan."
+            summary = f"Dokumen {filename} telah berhasil diproses dan siap untuk ditanyakan."
         
         print(f"✅ Summary generated: {summary[:100]}...")
         
