@@ -427,14 +427,15 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
     doc_chunks_path = session_dir / "documents" / doc_id / "chunks.json"
     
     if not doc_chunks_path.exists():
-        print(f"[!] Chunks file not found for doc {doc_id}")
+        print(f"[!] Chunks file not found for doc {doc_id}: {doc_chunks_path}")
         return []
     
     try:
         with open(doc_chunks_path) as f:
             data = json.load(f)
-            # FILTER chunks by doc_id marker
+            # FILTER chunks by doc_id marker - STRICT filtering
             chunks = []
+            total_chunks = len(data)
             for chunk_id, item in data.items():
                 if isinstance(item, dict) and 'content' in item:
                     content = item['content']
@@ -445,10 +446,11 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
                         chunks.append(content)
         
         if not chunks:
-            print(f"[!] No chunks found for document {doc_id}")
+            print(f"[!] No chunks found for document {doc_id} (checked {total_chunks} total chunks)")
+            print(f"[!] Looking for marker: [DOC_ID:{doc_id}]")
             return []
         
-        print(f"[*] Searching {len(chunks)} chunks in document {doc_id}...", end='', flush=True)
+        print(f"[*] Searching {len(chunks)} chunks (of {total_chunks} total) in document {doc_id}...", end='', flush=True)
         
         # Semantic search - USE AWAIT for async embedding function
         import numpy as np
@@ -488,17 +490,17 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         import numpy as np
         scores_array = np.array(scores)
         
-        # Filter: only keep chunks with score > 0.15 (relevance threshold - less strict)
-        valid_indices = np.where(scores_array > 0.15)[0]
+        # Filter: only keep chunks with score > 0.10 (slightly more lenient for better coverage)
+        valid_indices = np.where(scores_array > 0.10)[0]
         
         if len(valid_indices) > 0:
-            # Sort valid chunks by score, take top 5
+            # Sort valid chunks by score, take top 10 (increased from 5 for better context)
             valid_scores = [(idx, scores_array[idx]) for idx in valid_indices]
             valid_scores.sort(key=lambda x: x[1], reverse=True)
-            top_indices = [idx for idx, _ in valid_scores[:5]]
+            top_indices = [idx for idx, _ in valid_scores[:10]]
         else:
-            # Fallback: if no good matches, take top 5 chunks by score
-            top_indices = np.argsort(-scores_array)[:5]
+            # Fallback: if no good matches, take top 10 chunks by score (increased from 5)
+            top_indices = np.argsort(-scores_array)[:10]
         
         best_chunks = [chunks[i] for i in top_indices if i < len(chunks)]
         best_scores = [scores[i] for i in top_indices if i < len(scores)]
@@ -513,8 +515,8 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         combined = combined.replace('=== Page', '').replace('===', '').strip()
         
         # IMPORTANT: Limit context length to avoid overwhelming LLM
-        # Long context = more hallucinations
-        max_context_len = 1500
+        # Increased to 3000 chars for better multi-page/table coverage
+        max_context_len = 3000
         if len(combined) > max_context_len:
             combined = combined[:max_context_len]
             print(f"[*] Context truncated to {max_context_len} chars")

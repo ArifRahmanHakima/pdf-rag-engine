@@ -292,12 +292,14 @@ async function selectSession(sessionId, initialSummary = null) {
             if (session) {
                 currentPdfName.textContent = session.filename;
                 
-                // RESTORE chat history from localStorage instead of clearing
-                loadChatHistory(sessionId);
-                
                 // Load documents FIRST to set currentDocId properly
                 await loadDocuments(sessionId);
                 console.log(`[selectSession] After loadDocuments, currentDocId: ${currentDocId}, documents: ${documents.length}`);
+                
+                // THEN restore chat history for this specific document
+                if (currentDocId) {
+                    loadChatHistory(sessionId, currentDocId);
+                }
                 
                 // THEN load PDF with correct currentDocId
                 await loadPdfContent(sessionId, initialSummary);
@@ -313,12 +315,14 @@ async function selectSession(sessionId, initialSummary = null) {
     deleteBtn.style.display = 'block';
 }
 
-function loadChatHistory(sessionId) {
+function loadChatHistory(sessionId, docId) {
     /**
-     * Restore chat history from localStorage
+     * Restore chat history from localStorage - PER DOCUMENT
      */
-    const key = `chat_${sessionId}`;
+    const key = `chat_${sessionId}_${docId}`;
     const history = localStorage.getItem(key);
+    
+    console.log(`[loadChatHistory] Loading chat for session: ${sessionId}, doc: ${docId}`);
     
     if (history) {
         try {
@@ -328,20 +332,22 @@ function loadChatHistory(sessionId) {
                 addMessage(msg.text, msg.role, false); // Don't save again
             });
             chatMessages.scrollTop = chatMessages.scrollHeight;
+            console.log(`[loadChatHistory] Loaded ${messages.length} messages`);
         } catch (e) {
             console.error('Failed to restore chat history:', e);
             chatMessages.innerHTML = '<div class="empty-state"><p>Select a PDF and start asking questions</p></div>';
         }
     } else {
         chatMessages.innerHTML = '<div class="empty-state"><p>Select a PDF and start asking questions</p></div>';
+        console.log(`[loadChatHistory] No chat history found`);
     }
 }
 
-function saveChatHistory(sessionId) {
+function saveChatHistory(sessionId, docId) {
     /**
-     * Save chat history to localStorage
+     * Save chat history to localStorage - PER DOCUMENT
      */
-    const key = `chat_${sessionId}`;
+    const key = `chat_${sessionId}_${docId}`;
     const messages = [];
     
     chatMessages.querySelectorAll('.chat-message').forEach(msg => {
@@ -351,6 +357,7 @@ function saveChatHistory(sessionId) {
     });
     
     localStorage.setItem(key, JSON.stringify(messages));
+    console.log(`[saveChatHistory] Saved ${messages.length} messages for session: ${sessionId}, doc: ${docId}`);
 }
 
 async function loadDocuments(sessionId) {
@@ -375,9 +382,14 @@ async function loadDocuments(sessionId) {
         const documentsList = document.getElementById('documentsList');
         const docsContainer = document.getElementById('docsContainer');
         
+        if (!documentsList || !docsContainer) {
+            console.error('[loadDocuments] documentsList or docsContainer not found!');
+            return;
+        }
+        
         if (documents.length > 0) {
             documentsList.style.display = 'block';
-            docsContainer.innerHTML = '';
+            docsContainer.innerHTML = '';  // Clear completely
             
             documents.forEach(doc => {
                 const docItem = document.createElement('div');
@@ -397,6 +409,7 @@ async function loadDocuments(sessionId) {
                 `;
                 
                 docItem.addEventListener('click', () => {
+                    console.log(`[loadDocuments click] Clicked doc: ${doc.doc_id}`);
                     selectDocument(doc.doc_id);
                     // Update active state
                     document.querySelectorAll('.doc-item').forEach(item => {
@@ -415,8 +428,11 @@ async function loadDocuments(sessionId) {
             }
             console.log(`[loadDocuments] Final currentDocId: ${currentDocId}`);
         } else {
+            // NO documents - hide the section completely and clear
             documentsList.style.display = 'none';
+            docsContainer.innerHTML = '';
             currentDocId = null;
+            console.log(`[loadDocuments] No documents, hiding list`);
         }
     } catch (error) {
         console.error('Load documents error:', error);
@@ -427,7 +443,13 @@ async function selectDocument(docId) {
     /**
      * Switch to a different document and reload PDF
      */
+    console.log(`[selectDocument] Switching to doc: ${docId}`);
     currentDocId = docId;
+    
+    // Save chat for previous document (if any)
+    if (currentSessionId && currentDocId) {
+        saveChatHistory(currentSessionId, currentDocId);
+    }
     
     // Clear old PDF first
     pdfViewer.innerHTML = '<div class="empty-state"><p>Loading PDF...</p></div>';
@@ -446,6 +468,9 @@ async function selectDocument(docId) {
         return;
     }
     
+    // Load chat history for THIS specific document
+    loadChatHistory(currentSessionId, docId);
+    
     // THEN reload PDF with new document (now currentDocId is properly set)
     await loadPdfContent(currentSessionId);
     
@@ -454,7 +479,7 @@ async function selectDocument(docId) {
 
 async function deleteDocument(sessionId, docId) {
     /**
-     * Delete a document and all its data
+     * Delete a document and all its data (including chat)
      */
     if (!confirm(`Delete document? All chunks, chat history, and PDF will be removed.`)) {
         return;
@@ -475,6 +500,11 @@ async function deleteDocument(sessionId, docId) {
         
         console.log(`[deleteDocument] Backend deletion successful`);
         
+        // DELETE chat history for this document from localStorage
+        const chatKey = `chat_${sessionId}_${docId}`;
+        localStorage.removeItem(chatKey);
+        console.log(`[deleteDocument] Deleted chat history key: ${chatKey}`);
+        
         // Clear current doc ID if it was deleted
         if (currentDocId === docId) {
             currentDocId = null;
@@ -488,6 +518,8 @@ async function deleteDocument(sessionId, docId) {
         // Load PDF if any documents remain
         if (documents.length > 0 && currentDocId) {
             console.log(`[deleteDocument] Loading PDF for doc: ${currentDocId}`);
+            // Load fresh chat for the new document
+            loadChatHistory(sessionId, currentDocId);
             await loadPdfContent(sessionId);
         } else if (documents.length === 0) {
             // No documents left
@@ -682,9 +714,9 @@ function addMessage(text, sender, save = true) {
     chatMessages.appendChild(msg);
     chatMessages.scrollTop = chatMessages.scrollHeight;
     
-    // Save to localStorage
-    if (save && currentSessionId) {
-        saveChatHistory(currentSessionId);
+    // Save to localStorage - PER DOCUMENT
+    if (save && currentSessionId && currentDocId) {
+        saveChatHistory(currentSessionId, currentDocId);
     }
 }
 
