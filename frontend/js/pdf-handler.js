@@ -225,5 +225,17 @@ const PDFHandler = {
       const context = this.elements.canvas.getContext('2d');
       context.clearRect(0, 0, this.elements.canvas.width, this.elements.canvas.height);
     }
+    
+    if (this.elements.pageInfo) {
+      this.elements.pageInfo.textContent = 'of 1';
+    }
+    if (this.elements.pageInput) {
+      this.elements.pageInput.value = 1;
+    }
+  },
+
+  // Alias untuk reset - lebih mudah dibaca
+  clearPDF() {
+    this.reset();
   }
 };

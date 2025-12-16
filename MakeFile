@@ -1,17 +1,27 @@
 install requirements:
 	pip install -r requirements.txt
+
 docker-compose up -d:
 	docker-compose up -d
+
 postgres-initdb:
-	python api.services.init_db
+	python api/services/init_db.py
+
 uvicorn api.main:app --reload:
 	uvicorn api.main:app --reload	
+
 Remove-Items -Path .\data\* -Recurse -Force:
 	Remove-Item uploads -Recurse -Force
 	Remove-Item rag_Storage -Recurse -Force
 
 Activate-Dev-Environment:
-    .\venv\Scripts\Activate.ps1
+	.\venv\Scripts\Activate.ps1
 
 Check-Env-Variables:
-python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('LLM_MODEL:', os.getenv('LLM_MODEL')); print('API_KEY:', os.getenv('GOOGLE_API_KEY')[:20]+'...' if os.getenv('GOOGLE_API_KEY') else 'NOT FOUND')"
+	python -c "import os; from dotenv import load_dotenv; load_dotenv(); print('LLM_MODEL:', os.getenv('LLM_MODEL')); print('API_KEY:', os.getenv('GOOGLE_API_KEY')[:20]+'...' if os.getenv('GOOGLE_API_KEY') else 'NOT FOUND')"
+
+Get-Timing-Summary:
+	curl http://localhost:8000/admin/timing
+
+Clear-Timing-Logs:
+	curl -X POST http://localhost:8000/admin/timing/clear

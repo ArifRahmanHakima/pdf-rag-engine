@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from api.routes import upload, chat
 from api.services.rag_engine import clear_document_cache, clear_root_storage, reset_all_storage, list_documents
+from api.services.timer import Timer
 
 # ⭐ PENTING: Load .env DI AWAL!
 load_dotenv()
@@ -70,6 +71,26 @@ def reset_storage():
     return {
         "status": "ok",
         "message": "All storage has been reset. Please re-upload your PDFs."
+    }
+
+@app.get("/admin/timing")
+def get_timing():
+    """Get timing summary for all operations"""
+    logs = Timer.get_logs()
+    summary = Timer.get_summary()
+    return {
+        "status": "ok",
+        "logs": logs,
+        "summary": summary
+    }
+
+@app.post("/admin/timing/clear")
+def clear_timing():
+    """Clear timing logs"""
+    Timer.clear_logs()
+    return {
+        "status": "ok",
+        "message": "Timing logs cleared"
     }
 
 # Mount uploads folder untuk akses file PDF

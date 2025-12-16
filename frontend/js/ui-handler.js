@@ -15,15 +15,18 @@ const UIHandler = {
     sidebarOverlay: null,
     mobileViewToggle: null,
     showPdfBtn: null,
-    showChatBtn: null
+    showChatBtn: null,
+    sidebarResizer: null
   },
 
   isResizing: false,
+  isSidebarResizing: false,
   startX: 0,
   startLeftWidth: 0,
   currentUploadId: null,
   progressInterval: null,
   mobileView: 'chat', // 'chat' or 'pdf'
+  deleteStates: {}, // Track delete state for each document
   
   // Storage untuk chat history per dokumen
   chatHistories: {},
@@ -70,18 +73,24 @@ const UIHandler = {
 
   restoreSession() {
     console.log('🔄 restoreSession() called');
+    
+    // Coba load dari localStorage dulu
     const data = this.loadFromLocalStorage();
+    
+    // Juga fetch dari backend untuk mendapatkan daftar dokumen
+    this.fetchDocumentsFromBackend();
+    
     if (!data) {
-      console.log('📭 No saved session found');
+      console.log('📭 No saved session in localStorage');
       return false;
     }
 
     // Restore sidebar dengan dokumen yang sudah diupload
     const docs = Object.values(this.uploadedDocs);
-    console.log('📋 Documents to restore:', docs);
+    console.log('📋 Documents from localStorage:', docs);
     
     if (docs.length === 0) {
-      console.log('📭 No documents to restore');
+      console.log('📭 No documents in localStorage');
       return false;
     }
 
@@ -141,24 +150,206 @@ const UIHandler = {
     return docs.length > 0;
   },
 
+  // Fetch dokumen dari backend (untuk restore setelah localStorage diblokir)
+  async fetchDocumentsFromBackend() {
+    try {
+      console.log('🌐 Fetching documents from backend...');
+      const response = await fetch(`${CONFIG.API_BASE_URL}/upload/documents`);
+      
+      if (!response.ok) {
+        console.warn('Failed to fetch documents from backend');
+        return;
+      }
+      
+      const data = await response.json();
+      console.log('🌐 Documents from backend:', data.documents);
+      
+      if (data.documents && data.documents.length > 0) {
+        // Tambahkan dokumen ke sidebar jika belum ada
+        data.documents.forEach(doc => {
+          const docInfo = {
+            fileName: doc.fileName,
+            docId: doc.docId,
+            filePath: doc.filePath
+          };
+          
+          // Tambahkan ke uploadedDocs jika belum ada
+          if (!this.uploadedDocs[doc.docId]) {
+            this.uploadedDocs[doc.docId] = docInfo;
+          }
+          
+          // Tambahkan ke sidebar
+          this.restoreDocToSidebar(docInfo);
+        });
+        
+        console.log(`✅ Restored ${data.documents.length} documents from backend`);
+      }
+    } catch (error) {
+      console.warn('Error fetching documents from backend:', error);
+    }
+  },
+
   restoreDocToSidebar(docInfo) {
     // Cek apakah sudah ada di sidebar
     if (document.querySelector(`[data-doc-id="${docInfo.docId}"]`)) {
       return;
     }
 
+    const chatItem = this.createChatItem(docInfo.docId, docInfo.fileName);
+    this.elements.chatList.appendChild(chatItem);
+  },
+
+  // Helper function untuk membuat chat item dengan struktur lengkap
+  createChatItem(docId, fileName, isActive = false) {
     const chatItem = document.createElement('div');
-    chatItem.className = 'chat-item';
-    chatItem.textContent = docInfo.fileName;
-    chatItem.title = docInfo.fileName;
-    chatItem.dataset.docId = docInfo.docId;
-    chatItem.dataset.fileName = docInfo.fileName;
+    chatItem.className = `chat-item${isActive ? ' active' : ''}`;
+    chatItem.dataset.docId = docId;
+    chatItem.dataset.fileName = fileName;
+
+    // Container untuk nama file
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'chat-item-name';
+    nameSpan.textContent = fileName;
+    nameSpan.title = fileName;
+
+    // Confirm message (tersembunyi, muncul saat klik delete pertama kali)
+    const confirmDiv = document.createElement('div');
+    confirmDiv.className = 'chat-item-confirm';
+    confirmDiv.innerHTML = `
+      <span class="chat-item-confirm-text">Hapus?</span>
+      <button class="chat-item-cancel">Batal</button>
+    `;
+
+    // Cancel button handler
+    confirmDiv.querySelector('.chat-item-cancel').addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.cancelDelete(docId);
+    });
+
+    // Tombol delete dengan SVG icon Trash2
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'chat-item-delete';
+    deleteBtn.innerHTML = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <polyline points="3 6 5 6 21 6"></polyline>
+      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+      <line x1="10" y1="11" x2="10" y2="17"></line>
+      <line x1="14" y1="11" x2="14" y2="17"></line>
+    </svg>`;
+    deleteBtn.title = 'Hapus dokumen';
+    deleteBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.handleDeleteClick(docId, fileName);
+    });
+
+    chatItem.appendChild(nameSpan);
+    chatItem.appendChild(confirmDiv);
+    chatItem.appendChild(deleteBtn);
 
     chatItem.addEventListener('click', () => {
+      // Jika sedang confirming, jangan switch document
+      if (chatItem.classList.contains('confirming')) {
+        return;
+      }
       this.switchToDocument(chatItem);
     });
 
-    this.elements.chatList.appendChild(chatItem);
+    return chatItem;
+  },
+
+  // Handle delete click dengan 2-stage confirmation
+  handleDeleteClick(docId, fileName) {
+    const chatItem = document.querySelector(`[data-doc-id="${docId}"]`);
+    if (!chatItem) return;
+
+    const currentState = this.deleteStates[docId] || 'idle';
+
+    if (currentState === 'idle') {
+      // Klik pertama: masuk mode confirming
+      this.deleteStates[docId] = 'confirming';
+      chatItem.classList.add('confirming');
+
+      // Auto-reset setelah 3 detik jika tidak diklik lagi
+      this.deleteStates[`${docId}_timeout`] = setTimeout(() => {
+        this.cancelDelete(docId);
+      }, 3000);
+
+    } else if (currentState === 'confirming') {
+      // Klik kedua: hapus
+      this.deleteStates[docId] = 'deleting';
+      chatItem.classList.remove('confirming');
+      chatItem.classList.add('deleting');
+
+      // Clear timeout
+      if (this.deleteStates[`${docId}_timeout`]) {
+        clearTimeout(this.deleteStates[`${docId}_timeout`]);
+      }
+
+      // Delay sedikit untuk animasi
+      setTimeout(() => {
+        this.executeDelete(docId, fileName);
+      }, 300);
+    }
+  },
+
+  cancelDelete(docId) {
+    const chatItem = document.querySelector(`[data-doc-id="${docId}"]`);
+    if (chatItem) {
+      chatItem.classList.remove('confirming');
+    }
+    this.deleteStates[docId] = 'idle';
+
+    if (this.deleteStates[`${docId}_timeout`]) {
+      clearTimeout(this.deleteStates[`${docId}_timeout`]);
+    }
+  },
+
+  async executeDelete(docId, fileName) {
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/upload/documents/${docId}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.detail || 'Gagal menghapus dokumen');
+      }
+
+      const result = await response.json();
+      
+      // Remove from sidebar
+      const chatItem = document.querySelector(`[data-doc-id="${docId}"]`);
+      if (chatItem) {
+        chatItem.remove();
+      }
+
+      // Remove from local storage
+      delete this.uploadedDocs[docId];
+      delete this.chatHistories[docId];
+      delete this.deleteStates[docId];
+      this.saveToLocalStorage();
+
+      // If this was the active document, reset to welcome screen
+      if (STATE.docId === docId) {
+        STATE.docId = null;
+        STATE.currentFileName = null;
+        this.elements.welcomeScreen.style.display = 'flex';
+        this.elements.chatInterface.classList.remove('active');
+        ChatHandler.clearMessages();
+        PDFHandler.clearPDF();
+      }
+
+      this.showSuccess(result.message || 'Dokumen berhasil dihapus');
+      
+    } catch (error) {
+      console.error('Error deleting document:', error);
+      // Reset state on error
+      const chatItem = document.querySelector(`[data-doc-id="${docId}"]`);
+      if (chatItem) {
+        chatItem.classList.remove('deleting', 'confirming');
+      }
+      this.deleteStates[docId] = 'idle';
+      this.showError(`Gagal menghapus: ${error.message}`);
+    }
   },
 
   async reloadPDF(fileName) {
@@ -191,8 +382,10 @@ const UIHandler = {
     this.elements.mobileViewToggle = document.getElementById('mobileViewToggle');
     this.elements.showPdfBtn = document.getElementById('showPdfBtn');
     this.elements.showChatBtn = document.getElementById('showChatBtn');
+    this.elements.sidebarResizer = document.getElementById('sidebarResizer');
 
     this.attachEvents();
+    this.setupSidebarResizer();
     this.checkMobile();
   },
 
@@ -358,6 +551,11 @@ async processPDF(file) {
       // Generate unique upload ID
       this.currentUploadId = Utils.generateUploadId();
 
+      // ✅ Simpan chat history dokumen sebelumnya SEBELUM pindah
+      if (STATE.docId) {
+        this.saveChatHistory();
+      }
+
       // Switch to chat interface
       this.elements.welcomeScreen.style.display = 'none';
       this.elements.chatInterface.classList.add('active');
@@ -367,7 +565,11 @@ async processPDF(file) {
       STATE.currentFileName = file.name;
       this.elements.chatTitle.textContent = `📄 ${file.name}`;
       
-      // Clear previous chat
+      // ✅ Reset STATE untuk dokumen baru
+      STATE.docId = null;
+      STATE.chatId = null;
+      
+      // Clear previous chat - PENTING: pastikan chat kosong untuk dokumen baru
       ChatHandler.clearMessages();
       ChatHandler.enableInput(false);
       
@@ -611,32 +813,28 @@ async processPDF(file) {
       item.classList.remove('active');
     });
 
-    // Create new chat item
-    const chatItem = document.createElement('div');
-    chatItem.className = 'chat-item active';
-    chatItem.textContent = fileName;
-    chatItem.title = fileName;
-    
-    // Store doc info
-    const docInfo = {
-      fileName: fileName,
-      docId: docId || STATE.docId,
-      filePath: filePath
-    };
-    chatItem.dataset.docId = docInfo.docId;
-    chatItem.dataset.fileName = fileName;
+    // Cek apakah sudah ada di sidebar
+    const effectiveDocId = docId || STATE.docId;
+    if (document.querySelector(`[data-doc-id="${effectiveDocId}"]`)) {
+      // Jika sudah ada, cukup set active
+      const existingItem = document.querySelector(`[data-doc-id="${effectiveDocId}"]`);
+      existingItem.classList.add('active');
+      return;
+    }
+
+    // Create new chat item menggunakan helper function
+    const chatItem = this.createChatItem(effectiveDocId, fileName, true);
     
     // Save to uploadedDocs
-    if (docInfo.docId) {
-      this.uploadedDocs[docInfo.docId] = docInfo;
+    if (effectiveDocId) {
+      this.uploadedDocs[effectiveDocId] = {
+        fileName: fileName,
+        docId: effectiveDocId,
+        filePath: filePath
+      };
       // ✅ Simpan ke localStorage
       this.saveToLocalStorage();
     }
-    
-    // Add click handler to switch between documents
-    chatItem.addEventListener('click', () => {
-      this.switchToDocument(chatItem);
-    });
     
     this.elements.chatList.prepend(chatItem);
   },
@@ -721,9 +919,15 @@ async processPDF(file) {
         const blob = await response.blob();
         const file = new File([blob], fileName, { type: 'application/pdf' });
         await PDFHandler.loadPDF(file);
+      } else {
+        // File tidak ditemukan, clear PDF viewer dan tampilkan pesan
+        console.warn(`PDF file not found: ${fileName}`);
+        PDFHandler.clearPDF();
+        this.showError(`File PDF "${fileName}" tidak ditemukan. Mungkin file sudah dihapus dari server.`);
       }
     } catch (error) {
       console.warn('Could not reload PDF file:', error);
+      PDFHandler.clearPDF();
     }
     
     ChatHandler.enableInput(true);
@@ -778,6 +982,71 @@ async processPDF(file) {
         document.body.style.userSelect = '';
       }
     });
+  },
+
+  // Setup sidebar resizer untuk mengubah lebar sidebar
+  setupSidebarResizer() {
+    const resizer = this.elements.sidebarResizer;
+    const sidebar = this.elements.sidebar;
+    
+    if (!resizer || !sidebar) return;
+
+    let startX = 0;
+    let startWidth = 0;
+
+    const onMouseDown = (e) => {
+      if (STATE.isMobile) return;
+      
+      this.isSidebarResizing = true;
+      startX = e.clientX;
+      startWidth = sidebar.offsetWidth;
+      
+      resizer.classList.add('resizing');
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+      
+      e.preventDefault();
+    };
+
+    const onMouseMove = (e) => {
+      if (!this.isSidebarResizing) return;
+      
+      const deltaX = e.clientX - startX;
+      const newWidth = startWidth + deltaX;
+      
+      // Min 200px, Max 400px
+      if (newWidth >= 200 && newWidth <= 400) {
+        sidebar.style.width = `${newWidth}px`;
+      }
+    };
+
+    const onMouseUp = () => {
+      if (this.isSidebarResizing) {
+        this.isSidebarResizing = false;
+        resizer.classList.remove('resizing');
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    };
+
+    resizer.addEventListener('mousedown', onMouseDown);
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+
+    // Touch support untuk mobile
+    resizer.addEventListener('touchstart', (e) => {
+      if (STATE.isMobile) return;
+      const touch = e.touches[0];
+      onMouseDown({ clientX: touch.clientX, preventDefault: () => {} });
+    });
+
+    document.addEventListener('touchmove', (e) => {
+      if (!this.isSidebarResizing) return;
+      const touch = e.touches[0];
+      onMouseMove({ clientX: touch.clientX });
+    });
+
+    document.addEventListener('touchend', onMouseUp);
   },
 
   showError(message) {
