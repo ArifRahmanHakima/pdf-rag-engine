@@ -39,13 +39,29 @@ def check_document_exists(doc_id: str) -> bool:
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
     doc_working_dir = os.path.join(base_dir, doc_id)
     
-    # Check if essential files exist
-    graph_file = os.path.join(doc_working_dir, "graph_chunk_entity_relation.graphml")
-    return os.path.exists(graph_file)
+    # Check if directory exists
+    if not os.path.exists(doc_working_dir):
+        return False
+    
+    # Check multiple possible files that indicate document was processed
+    possible_files = [
+        "graph_chunk_entity_relation.graphml",
+        "kv_store_full_docs.json",
+        "kv_store_doc_status.json",
+        "vdb_entities.json"
+    ]
+    
+    for filename in possible_files:
+        filepath = os.path.join(doc_working_dir, filename)
+        if os.path.exists(filepath):
+            print(f"✅ Document exists check: Found {filename} for doc_id {doc_id}")
+            return True
+    
+    return False
 
-def get_rag_instance(doc_id: str):
+def get_rag_instance(doc_id: str, force_reload: bool = False):
     """Get or create RAG instance for specific document"""
-    if doc_id not in rag_instances:
+    if doc_id not in rag_instances or force_reload:
         # Buat working directory khusus untuk dokumen ini
         base_dir = os.getenv("WORKING_DIR", "./rag_storage")
         doc_working_dir = os.path.join(base_dir, doc_id)
@@ -69,20 +85,30 @@ def get_rag_instance(doc_id: str):
             # Document exists, initialize with LightRAG so we can query
             print(f"📂 Loading existing document: {doc_id}")
             
-            lightrag_instance = LightRAG(
-                working_dir=doc_working_dir,
-                llm_model_func=llm_model_func,
-                embedding_func=embedding_func,
-            )
-            
-            rag_instances[doc_id] = RAGAnything(
-                config=config,
-                llm_model_func=llm_model_func,
-                vision_model_func=vision_model_func,
-                embedding_func=embedding_func,
-                lightrag=lightrag_instance,
-            )
-            print(f"✅ RAG instance loaded with LightRAG for doc_id: {doc_id}")
+            try:
+                lightrag_instance = LightRAG(
+                    working_dir=doc_working_dir,
+                    llm_model_func=llm_model_func,
+                    embedding_func=embedding_func,
+                )
+                
+                rag_instances[doc_id] = RAGAnything(
+                    config=config,
+                    llm_model_func=llm_model_func,
+                    vision_model_func=vision_model_func,
+                    embedding_func=embedding_func,
+                    lightrag=lightrag_instance,
+                )
+                print(f"✅ RAG instance loaded with LightRAG for doc_id: {doc_id}")
+            except Exception as e:
+                print(f"⚠️ Error loading LightRAG, creating new instance: {e}")
+                # Fallback: create RAGAnything tanpa lightrag, nanti akan diinit saat process
+                rag_instances[doc_id] = RAGAnything(
+                    config=config,
+                    llm_model_func=llm_model_func,
+                    vision_model_func=vision_model_func,
+                    embedding_func=embedding_func,
+                )
         else:
             # New document, create without LightRAG (will be initialized during processing)
             rag_instances[doc_id] = RAGAnything(
@@ -162,6 +188,27 @@ async def query_document(doc_id: str, question: str, top_k: int = 3):
         # Get RAG instance untuk dokumen ini
         rag = get_rag_instance(doc_id)
         
+        # Cek apakah lightrag tersedia
+        if not hasattr(rag, 'lightrag') or rag.lightrag is None:
+            print(f"⚠️ LightRAG not initialized, trying to reload...")
+            # Try to reload dengan force
+            rag = get_rag_instance(doc_id, force_reload=True)
+            
+            # Jika masih tidak ada, coba init manual
+            if not hasattr(rag, 'lightrag') or rag.lightrag is None:
+                base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+                doc_working_dir = os.path.join(base_dir, doc_id)
+                
+                if check_document_exists(doc_id):
+                    print(f"📂 Manually initializing LightRAG for: {doc_id}")
+                    rag.lightrag = LightRAG(
+                        working_dir=doc_working_dir,
+                        llm_model_func=llm_model_func,
+                        embedding_func=embedding_func,
+                    )
+                else:
+                    raise Exception(f"Document {doc_id} has not been processed. Please upload and process the document first.")
+        
         # Query
         result = await rag.aquery(
             question,
@@ -170,6 +217,11 @@ async def query_document(doc_id: str, question: str, top_k: int = 3):
         )
         
         answer = result if isinstance(result, str) else result.get("text", "Tidak ada jawaban.")
+        
+        # Jika jawaban kosong atau "[no-context]", coba fallback ke direct query
+        if not answer or "[no-context]" in answer.lower() or "tidak ada jawaban" in answer.lower():
+            print(f"⚠️ No context found, trying fallback with document content...")
+            answer = await fallback_query_with_content(doc_id, question)
         
         print(f"✅ Answer generated: {answer[:100]}...")
         
@@ -180,6 +232,60 @@ async def query_document(doc_id: str, question: str, top_k: int = 3):
         import traceback
         traceback.print_exc()
         raise e
+
+async def fallback_query_with_content(doc_id: str, question: str):
+    """Fallback: Query using direct document content from kv_store"""
+    import json
+    
+    base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+    doc_working_dir = os.path.join(base_dir, doc_id)
+    docs_file = os.path.join(doc_working_dir, "kv_store_full_docs.json")
+    
+    if not os.path.exists(docs_file):
+        return "Maaf, tidak dapat menemukan konten dokumen."
+    
+    try:
+        with open(docs_file, 'r', encoding='utf-8') as f:
+            docs_data = json.load(f)
+        
+        # Ambil konten dari dokumen
+        content_parts = []
+        for key, value in docs_data.items():
+            if isinstance(value, dict) and 'content' in value:
+                content_parts.append(value['content'][:2000])  # Limit per chunk
+            elif isinstance(value, str):
+                content_parts.append(value[:2000])
+        
+        if not content_parts:
+            return "Maaf, dokumen tidak memiliki konten yang dapat dibaca."
+        
+        # Gabung dan potong konten
+        full_content = "\n\n".join(content_parts)[:6000]  # Limit total
+        
+        print(f"📄 Using fallback with {len(full_content)} chars of content")
+        
+        # Query langsung ke LLM dengan konten
+        prompt = f"""Berdasarkan konten dokumen berikut, jawab pertanyaan pengguna dalam Bahasa Indonesia.
+
+=== KONTEN DOKUMEN ===
+{full_content}
+
+=== PERTANYAAN ===
+{question}
+
+=== JAWABAN ===
+Berikan jawaban yang jelas dan informatif berdasarkan konten dokumen di atas:"""
+
+        answer = await llm_model_func(prompt)
+        
+        if answer:
+            return answer
+        else:
+            return "Maaf, tidak dapat menghasilkan jawaban saat ini."
+            
+    except Exception as e:
+        print(f"❌ Fallback query error: {e}")
+        return f"Maaf, terjadi kesalahan saat membaca dokumen: {str(e)}"
 
 # === LIST ALL DOCUMENTS ===
 def list_documents():
