@@ -546,12 +546,12 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         combined = combined.strip()
         
         # Limit context length - INCREASED for better coverage
-        # For section/table queries: up to 15000 chars
-        # For general queries: 10000 chars
+        # For section/table queries: up to 20000 chars
+        # For general queries: 8000 chars (enough for summary, not overwhelming)
         if any(w in query.lower() for w in ['menimbang', 'mengingat', 'menetapkan', 'tabel', 'daftar']):
-            max_context_len = 15000  # More for section/table queries
+            max_context_len = 20000  # More for section/table queries - increased to capture all points
         else:
-            max_context_len = 10000  # Standard for other queries
+            max_context_len = 8000  # Reduced for general queries to avoid garbage
         
         if len(combined) > max_context_len:
             combined = combined[:max_context_len]

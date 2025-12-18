@@ -73,6 +73,8 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         section_chunk_indices = set()
         if requested_section:
             section_started = False
+            section_end_idx = len(chunks)  # Default: goes to end
+            
             for idx, chunk in enumerate(chunks):
                 chunk_lower = chunk.lower()
                 
@@ -81,7 +83,7 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                     section_started = True
                     section_chunk_indices.add(idx)
                     print(f"[*] Section '{requested_section}' STARTS at chunk {idx}", flush=True)
-                # While section is active, add chunks until next major section
+                # While section is active, check if a DIFFERENT section starts
                 elif section_started:
                     # Check if a DIFFERENT section starts (means our section ended)
                     different_section_found = False
@@ -89,15 +91,26 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                         if other_sec != requested_section:
                             if re.search(rf'^\s*{other_sec}\s*[:.]', chunk_lower, re.MULTILINE | re.IGNORECASE):
                                 different_section_found = True
+                                section_end_idx = idx  # Section ends here
                                 section_started = False
                                 print(f"[*] Section '{requested_section}' ENDS before chunk {idx} (found '{other_sec}')", flush=True)
                                 break
                     
                     if not different_section_found:
-                        # Still in same section
+                        # Still in same section - add this chunk
                         section_chunk_indices.add(idx)
+                    else:
+                        # Different section found, stop looking
+                        break
             
-            print(f"[*] Found {len(section_chunk_indices)} chunks in section '{requested_section}'", flush=True)
+            # If section never ended, collect all remaining chunks after section start
+            if section_started:
+                # We're still in the section, add all chunks from start to end
+                start_idx = min(section_chunk_indices) if section_chunk_indices else 0
+                for idx in range(start_idx, len(chunks)):
+                    section_chunk_indices.add(idx)
+            
+            print(f"[*] Found {len(section_chunk_indices)} chunks in section '{requested_section}' (indices: {sorted(section_chunk_indices)})", flush=True)
         
         for chunk_idx, chunk in enumerate(chunks):
             chunk_lower = chunk.lower()
@@ -180,10 +193,28 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             
             # ===== TERM FREQUENCY - BASE SCORING =====
             query_words = [w for w in query_lower.split() if len(w) > 3 and w not in section_keywords + table_keywords]
+            
+            # For general queries: look for first meaningful chunk (usually title/intro)
+            # Chunks at the start are usually more relevant for "jelaskan isi dokumen"
+            is_early_chunk = chunk_idx < 3  # First 3 chunks
+            if is_early_chunk:
+                score += 100.0  # Boost for early chunks (likely intro)
+            
+            # Length heuristic: very short chunks usually not content
+            chunk_len = len(chunk)
+            if chunk_len < 200:
+                score -= 50.0  # Penalty for very short chunks
+            elif chunk_len > 3000:
+                score += 20.0  # Prefer longer chunks (more content)
+            
             for word in query_words:
                 count = chunk_lower.count(word)
                 if count > 0:
-                    score += count * 5.0  # Higher multiplier
+                    score += count * 10.0  # Increased multiplier
+            
+            # If chunk starts with title-like patterns, boost it
+            if re.match(r'^[A-Z][A-Z\s\d\-]+$', chunk[:50]):  # ALL CAPS title
+                score += 150.0
             
             scores.append(score)
         
@@ -210,11 +241,23 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             top_indices = np.argsort(-scores_array)[:top_k]
             best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
         else:
-            # For general queries: normal ranking
-            top_k = 50
-            threshold = 0  # Need positive score
+            # For general queries: take top relevant chunks only
+            # For large documents: be more selective
+            if len(chunks) > 20:
+                # Large document: take only top 10-15 most relevant
+                top_k = 15
+                threshold = 50.0  # Strict threshold to avoid garbage chunks
+            else:
+                # Smaller document: more lenient
+                top_k = 30
+                threshold = 0.0
+            
             top_indices = np.argsort(-scores_array)[:top_k]
             best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
+            
+            # If too few chunks found, relax threshold but keep top_k limit
+            if len(best_chunks) < 5 and top_k > 10:
+                best_chunks = [chunks[i] for i in top_indices[:min(10, len(chunks))]]
         
         if not best_chunks:
             # Fallback: take top chunks anyway
