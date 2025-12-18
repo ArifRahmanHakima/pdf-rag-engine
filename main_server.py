@@ -38,6 +38,15 @@ from search_logic import search_chunks_strict
 # Import extraction - EXACT SAME from main_openrouter.py
 from main_openrouter import extract_text_from_pdf_with_ocr
 
+# Import table processor for formatting tables
+try:
+    from table_processor import TableProcessor
+    TABLE_PROCESSOR = TableProcessor()
+    print("[✓] Table processor loaded")
+except Exception as e:
+    print(f"[!] Table processor not available: {e}")
+    TABLE_PROCESSOR = None
+
 print("\n[*] Starting RAG Server (same logic as main_openrouter.py)...\n")
 
 # Same config as main_openrouter.py
@@ -421,6 +430,76 @@ async def delete_document(session_id: str, doc_id: str):
         print(f"[!] Delete error: {e}")
         return JSONResponse(content={"success": False, "error": str(e)})
 
+def cleanup_llm_response(text: str) -> str:
+    """Clean up LLM response - remove markdown artifacts and format nicely"""
+    import re
+    
+    if not text:
+        return text
+    
+    # Remove excessive asterisks and markdown formatting
+    text = re.sub(r'\*{2,}', '', text)  # Remove ** markers
+    text = re.sub(r'_{2,}', '', text)   # Remove __ markers
+    text = re.sub(r'`+', '', text)      # Remove backticks
+    
+    # Clean up quotes and special formatting
+    text = text.replace('""', '"').replace("''", "'")
+    text = re.sub(r'"(\w+)":', r'\1:', text)  # Remove quotes around keys
+    text = re.sub(r"'(\w+)':", r'\1:', text)
+    
+    # Remove JSON-like artifacts: **"key"**: -> key:
+    text = re.sub(r'\*\*"([^"]+)"\*\*:\s*', r'\1: ', text)
+    text = re.sub(r'\*\*([^*]+)\*\*:\s*', r'\1: ', text)
+    
+    # Clean up list markers - normalize to clean format
+    # Convert various markers to consistent format
+    lines = text.split('\n')
+    cleaned_lines = []
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        # Skip empty lines (but we'll add them back for spacing)
+        if not stripped:
+            cleaned_lines.append('')
+            continue
+        
+        # Fix numbered items with various formats
+        # "1. text" -> "1. text"
+        # "1) text" -> "1. text"  
+        # "1: text" -> "1. text"
+        stripped = re.sub(r'^(\d+)[):](\s+)', r'\1. \2', stripped)
+        
+        # Fix lettered items
+        # "a) text" -> "• text"
+        # "a. text" -> "• text"
+        stripped = re.sub(r'^([a-z])[):](\s+)', r'• \2', stripped)
+        
+        # Remove excessive hyphens/dashes at start (keep only one)
+        while stripped.startswith('--'):
+            stripped = stripped[1:]
+        
+        # Convert multiple markers to single bullet
+        if stripped.startswith('- -'):
+            stripped = '• ' + stripped[3:].lstrip()
+        elif stripped.startswith('- '):
+            stripped = '• ' + stripped[2:]
+        elif stripped.startswith('• '):
+            pass  # Keep as is
+        
+        cleaned_lines.append(stripped)
+    
+    # Join lines, but add spacing between logical sections
+    text = '\n'.join(cleaned_lines)
+    
+    # Add paragraph breaks before numbered sections
+    text = re.sub(r'\n(\d+\.)', r'\n\n\1', text)
+    
+    # Remove excessive newlines
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text.strip()
+
 async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
     """Search chunks using lenient algorithm from search_logic.py"""
     try:
@@ -439,7 +518,32 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         
         # Combine chunks with newline separator
         combined = "\n".join(best_chunks)
-        combined = combined.replace('=== Page', '').replace('===', '').strip()
+        
+        # Clean up OCR artifacts and extra whitespace
+        import re as regex_module
+        
+        # Remove page markers
+        combined = regex_module.sub(r'=== Page \d+ ===', '', combined, flags=regex_module.IGNORECASE)
+        combined = regex_module.sub(r'===\s*', '', combined)
+        
+        # Remove multiple spaces (but keep intentional spacing in tables)
+        combined = regex_module.sub(r' {3,}', '  ', combined)  # Triple+ -> double space
+        
+        # Remove multiple newlines
+        combined = regex_module.sub(r'\n\n\n+', '\n\n', combined)
+        
+        # Remove strange unicode characters and control chars
+        combined = ''.join(c for c in combined if ord(c) >= 32 or c in '\n\t')
+        
+        # Fix common OCR artifacts
+        combined = regex_module.sub(r'([^\w])\|\|([^\w])', r'\1|\2', combined)  # Fix || artifacts
+        
+        # Clean up extra spaces at line start/end
+        lines = combined.split('\n')
+        lines = [line.strip() for line in lines]
+        combined = '\n'.join(lines)
+        
+        combined = combined.strip()
         
         # Limit context length - INCREASED for better coverage
         # For section/table queries: up to 15000 chars
@@ -461,6 +565,65 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         import traceback
         traceback.print_exc()
         return []
+
+def format_table_response(context: str, question: str):
+    """
+    Try to format table response if context contains structured table data
+    Returns formatted answer or None if no table found
+    """
+    if not TABLE_PROCESSOR:
+        return None
+    
+    if not any(kw in question.lower() for kw in ['tabel', 'daftar', 'table', 'daftar nama', 'siapa', 'kelompok', 'kategori']):
+        return None
+    
+    try:
+        # Try to extract and format table
+        tables = TABLE_PROCESSOR.detect_table_region(context)
+        
+        if not tables:
+            return None
+        
+        # Extract first table found
+        start_pos, end_pos, table_type = tables[0]
+        table_lines = context[start_pos:end_pos].split('\n')
+        
+        table_data = None
+        
+        # Try to parse based on type
+        if table_type == "box":
+            table_data = TABLE_PROCESSOR.parse_box_table(table_lines)
+        elif table_type == "pipe":
+            table_data = TABLE_PROCESSOR.parse_pipe_table(table_lines)
+        else:
+            table_data = TABLE_PROCESSOR.parse_text_table(table_lines)
+        
+        if table_data:
+            # Format table for display - clean and readable
+            headers = table_data.get('headers', [])
+            rows = table_data.get('rows', [])
+            
+            # Build readable table response
+            result = f"📋 **Tabel** ({table_type}):\n\n"
+            
+            # Header line
+            result += "| " + " | ".join(headers) + " |\n"
+            result += "|" + "|".join(["-" * (len(h) + 2) for h in headers]) + "|\n"
+            
+            # Data rows (limit to 50)
+            for idx, row in enumerate(rows[:50], 1):
+                result += "| " + " | ".join(str(c).strip()[:50] for c in row) + " |\n"
+            
+            if len(rows) > 50:
+                result += f"\n... dan {len(rows) - 50} baris lagi"
+            
+            return result
+        
+        return None
+    
+    except Exception as e:
+        print(f"[!] Table formatting error: {e}")
+        return None
 
 @app.post("/api/query")
 async def query_pdf(request: QueryRequest):
@@ -493,21 +656,34 @@ async def query_pdf(request: QueryRequest):
             
             context = chunks[0]['content']
             
-            # For short context: return directly
-            if len(context) < 600:
-                answer = context
+            # Try table formatting first if it's a table question
+            table_answer = format_table_response(context, question)
+            if table_answer:
+                answer = table_answer
+            # For short context: return directly (but still clean)
+            elif len(context) < 600:
+                answer = cleanup_llm_response(context)
             # Check for greeting-only questions
             elif question.lower().strip() in ['hai', 'halo', 'hi', 'hello', 'assalamu\'alaikum', 'pagi', 'siang', 'sore', 'malam']:
                 answer = "Halo! Ada yang bisa saya bantu tentang dokumen ini?"
             else:
                 # For longer context: use LLM with focused prompt
                 system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
-ATURAN UTAMA:
-1. Jawab TEPAT apa yang ditanya, JANGAN tambah informasi tidak diminta
-2. Jika ditanya tabel: JELASKAN tabel tersebut dengan rinci (daftar item, kolom penting)
-3. Jika ditanya bagian spesifik (Menimbang/Mengingat/etc): LIST SEMUA POIN dengan nomor/huruf
-4. Jika ditanya point spesifik (point 2, point a, etc): HANYA jawab point itu saja
-5. Jawab dari dokumen saja, jangan tambah pengetahuan umum
+
+ATURAN PEMFORMATAN - SANGAT PENTING:
+- Gunakan line break yang cukup untuk readability
+- Untuk list: gunakan format "• item" atau "1. item" dengan line break setelah setiap item
+- Pisahkan poin-poin utama dengan line break kosong
+- Jangan gunakan markdown seperti ** atau __
+- Jangan pernah output JSON atau struktur data kompleks
+- Gunakan spacing untuk visual hierarchy yang jelas
+
+ATURAN KONTEN:
+1. Jawab TEPAT apa yang ditanya, JANGAN tambah informasi
+2. Jika ditanya tabel: LIST item dengan format "Nama | Kategori | Nilai" atau "• item"
+3. Jika ditanya bagian spesifik (Menimbang/Mengingat): LIST SEMUA POIN dengan nomor atau bullet
+4. Jika ditanya point spesifik (point 2, point a): HANYA jawab itu saja
+5. Jawab dari dokumen SAJA, jangan tambah pengetahuan umum
 6. JANGAN tambah kesimpulan atau summary tidak diminta"""
 
                 answer_prompt = f"""Pertanyaan: {question}
@@ -515,7 +691,7 @@ ATURAN UTAMA:
 Konteks dari dokumen:
 {context}
 
-Jawaban:"""
+Jawaban (format dengan jelas, gunakan line break untuk setiap poin):"""
                 
                 t_llm_start = time.time()
                 answer = await asyncio.wait_for(
@@ -524,6 +700,9 @@ Jawaban:"""
                 )
                 t_llm = time.time() - t_llm_start
                 print(f"[OK] LLM: {t_llm:.2f}s")
+                
+                # Clean up response formatting
+                answer = cleanup_llm_response(answer)
             
             t_total = time.time() - t_total_start
             

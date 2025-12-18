@@ -437,7 +437,29 @@ body {
     word-break: break-word;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
     font-size: 14px;
-    line-height: 1.4;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    overflow-wrap: break-word;
+}
+
+.chat-message.assistant-message .message-content {
+    font-family: 'Segoe UI', Roboto, sans-serif;
+}
+
+/* Better formatting for lists and content */
+.message-content p,
+.message-content div {
+    margin-bottom: 8px;
+}
+
+.message-content ul,
+.message-content ol {
+    margin-left: 16px;
+    margin-bottom: 8px;
+}
+
+.message-content li {
+    margin-bottom: 4px;
 }
 
 .message-content {

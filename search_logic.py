@@ -32,15 +32,12 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                 if isinstance(item, dict) and 'content' in item:
                     content = item['content']
                     
-                    # CRITICAL: Only include chunks from THIS document
-                    if doc_id_marker in content:
-                        # Remove the marker before storing
-                        content = content.replace(f"{doc_id_marker}\n", "").strip()
-                        if content:
-                            chunks.append(content)
+                    # Load ALL chunks from the document
+                    # (Marker might not be on all chunks if LightRAG split them)
+                    chunks.append(content)
         
         if not chunks:
-            print(f"[!] No chunks found with marker [{doc_id}]", flush=True)
+            print(f"[!] No chunks found for doc={doc_id}", flush=True)
             return []
         
         print(f"[*] Searching {len(chunks)} chunks from doc {doc_id}: '{query[:60]}'", flush=True)
@@ -72,26 +69,63 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         # ========== SCORE CHUNKS ==========
         scores = []
         
+        # For section queries: find ALL chunks that belong to that section
+        section_chunk_indices = set()
+        if requested_section:
+            section_started = False
+            for idx, chunk in enumerate(chunks):
+                chunk_lower = chunk.lower()
+                
+                # Check if this chunk starts the requested section
+                if re.search(rf'^\s*{requested_section}\s*[:.]', chunk_lower, re.MULTILINE | re.IGNORECASE):
+                    section_started = True
+                    section_chunk_indices.add(idx)
+                    print(f"[*] Section '{requested_section}' STARTS at chunk {idx}", flush=True)
+                # While section is active, add chunks until next major section
+                elif section_started:
+                    # Check if a DIFFERENT section starts (means our section ended)
+                    different_section_found = False
+                    for other_sec in section_keywords:
+                        if other_sec != requested_section:
+                            if re.search(rf'^\s*{other_sec}\s*[:.]', chunk_lower, re.MULTILINE | re.IGNORECASE):
+                                different_section_found = True
+                                section_started = False
+                                print(f"[*] Section '{requested_section}' ENDS before chunk {idx} (found '{other_sec}')", flush=True)
+                                break
+                    
+                    if not different_section_found:
+                        # Still in same section
+                        section_chunk_indices.add(idx)
+            
+            print(f"[*] Found {len(section_chunk_indices)} chunks in section '{requested_section}'", flush=True)
+        
         for chunk_idx, chunk in enumerate(chunks):
             chunk_lower = chunk.lower()
             score = 0.0
             
             # ===== SECTION MATCHING - HIGHEST PRIORITY =====
             if requested_section:
-                chunk_start = chunk_lower.strip()[:150]
-                
-                # EXACT section header match
-                if chunk_start.startswith(requested_section):
-                    score += 1000.0  # MAXIMUM for exact section match
-                # Softer match: section keyword appears in first 200 chars
-                elif requested_section in chunk_lower[:200]:
-                    score += 500.0  # High score for section in first part
-                # Check if contains DIFFERENT section -> penalize
+                if chunk_idx in section_chunk_indices:
+                    # INSIDE the requested section
+                    score += 500.0  # High score for being in correct section
+                    
+                    # Check if chunk is header or content
+                    if re.search(rf'^\s*{requested_section}\s*[:.]', chunk_lower, re.MULTILINE | re.IGNORECASE):
+                        score += 300.0  # Extra bonus for section header
+                    
+                    # BOOST for chunks with numbered/lettered points (high chance of valuable content)
+                    point_count = len(re.findall(r'^\s*[0-9a-z][\.)\:]', chunk_lower, re.MULTILINE))
+                    if point_count > 0:
+                        score += point_count * 50.0  # Points are valuable in sections
                 else:
+                    # NOT in requested section -> strong penalty
+                    score -= 500.0
+                    
+                    # Check if contains DIFFERENT section -> extra penalty
                     for other_sec in section_keywords:
                         if other_sec != requested_section:
                             if re.search(rf'^\s*{other_sec}\s*[:.]', chunk_lower, re.MULTILINE | re.IGNORECASE):
-                                score -= 300.0  # Strong penalty
+                                score -= 200.0  # Extra penalty
                                 break
             
             # ===== TABLE DETECTION - HIGH PRIORITY =====
@@ -156,26 +190,40 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         # ========== SELECT TOP CHUNKS ==========
         scores_array = np.array(scores)
         
-        if requested_section or is_table_query:
-            # For section/table: be VERY generous
-            top_k = 100
+        if requested_section:
+            # For section queries: ONLY return chunks from that specific section
+            # section_chunk_indices already has the correct chunks - don't filter further!
+            # Just get them in order
+            section_indices_list = sorted(list(section_chunk_indices))
+            best_chunks = [chunks[i] for i in section_indices_list]
+            
+            if not best_chunks:
+                # Fallback if no section chunks found
+                print(f"[!] No chunks found for section, taking top chunks", flush=True)
+                top_indices = np.argsort(-scores_array)[:20]
+                best_chunks = [chunks[i] for i in top_indices]
+            
+        elif is_table_query:
+            # For table queries: return chunks with table indicators
+            top_k = 999
             threshold = -100
+            top_indices = np.argsort(-scores_array)[:top_k]
+            best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
         else:
-            # For general: normal
+            # For general queries: normal ranking
             top_k = 50
-            threshold = -50
-        
-        top_indices = np.argsort(-scores_array)[:top_k]
-        
-        # Filter by threshold, but allow fallback
-        best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
+            threshold = 0  # Need positive score
+            top_indices = np.argsort(-scores_array)[:top_k]
+            best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
         
         if not best_chunks:
-            # Fallback: take top 50 anyway
-            print(f"[!] No chunks above threshold, taking top 50", flush=True)
-            best_chunks = [chunks[i] for i in top_indices[:50]]
+            # Fallback: take top chunks anyway
+            print(f"[!] No chunks above threshold, taking top chunks", flush=True)
+            best_chunks = [chunks[i] for i in np.argsort(-scores_array)[:20]]
         
-        # Print diagnostics
+        # Print diagnostics - use top_indices if available, otherwise calculate
+        if 'top_indices' not in locals():
+            top_indices = np.argsort(-scores_array)[:15]
         top_scores = [scores_array[i] for i in top_indices[:15]]
         print(f"[✓] Selected {len(best_chunks)} chunks from {len(chunks)} total", flush=True)
         print(f"[*] Top scores: {[f'{s:.0f}' for s in top_scores[:10]]}", flush=True)
