@@ -656,6 +656,10 @@ async def query_pdf(request: QueryRequest):
             
             context = chunks[0]['content']
             
+            # Detect query type
+            question_lower = question.lower()
+            is_summary_query = any(kw in question_lower for kw in ['jelaskan isi dokumen', 'ringkas', 'summary', 'overview', 'ringkasan', 'apa isi dokumen', 'tentang dokumen'])
+            
             # Try table formatting first if it's a table question
             table_answer = format_table_response(context, question)
             if table_answer:
@@ -667,8 +671,29 @@ async def query_pdf(request: QueryRequest):
             elif question.lower().strip() in ['hai', 'halo', 'hi', 'hello', 'assalamu\'alaikum', 'pagi', 'siang', 'sore', 'malam']:
                 answer = "Halo! Ada yang bisa saya bantu tentang dokumen ini?"
             else:
-                # For longer context: use LLM with focused prompt
-                system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
+                # For summary queries: use special prompt
+                if is_summary_query:
+                    system_prompt = """Kamu adalah assistant yang membuat RINGKASAN DOKUMEN yang singkat dan padat.
+
+ATURAN RINGKASAN:
+- Buat SUMMARY SINGKAT: max 5-7 poin utama SAJA
+- Jelaskan tujuan/maksud utama dokumen dalam 1-2 kalimat
+- Highlight bagian kunci: Menimbang, Mengingat, Memutuskan (jika ada)
+- Gunakan bullet points (•) untuk clarity
+- Format: • Poin 1\n• Poin 2\n• dll
+- JANGAN copy-paste seluruh isi dokumen
+- Target: 200-300 kata maksimal
+- TIDAK BOLEH ada markdown atau simbol aneh"""
+
+                    answer_prompt = f"""Pertanyaan: {question}
+
+Konteks dari dokumen:
+{context}
+
+RINGKASAN SINGKAT (max 5-7 poin, 200-300 kata):"""
+                else:
+                    # Regular question
+                    system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
 
 ATURAN PEMFORMATAN - SANGAT PENTING:
 - Gunakan line break yang cukup untuk readability
@@ -686,7 +711,7 @@ ATURAN KONTEN:
 5. Jawab dari dokumen SAJA, jangan tambah pengetahuan umum
 6. JANGAN tambah kesimpulan atau summary tidak diminta"""
 
-                answer_prompt = f"""Pertanyaan: {question}
+                    answer_prompt = f"""Pertanyaan: {question}
 
 Konteks dari dokumen:
 {context}
