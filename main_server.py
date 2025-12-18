@@ -33,6 +33,7 @@ from raganything.config import RAGAnythingConfig
 from embedding_qwen import load_embedding_model, get_embedding_func
 from llm_openrouter import llm_model_func_openrouter
 from lightrag import LightRAG
+from search_logic import search_chunks_strict
 
 # Import extraction - EXACT SAME from main_openrouter.py
 from main_openrouter import extract_text_from_pdf_with_ocr
@@ -57,15 +58,15 @@ class QueryRequest(BaseModel):
 
 # ===== HELPERS - SAME AS main_openrouter.py =====
 def _load_embedding_model():
-    """Load embedding model - returns tuple (model, func) EXACT as main_openrouter.py"""
+    """Load embedding model - returns embedding_func"""
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
-    embedding_model = load_embedding_model()
+    load_embedding_model()
     sys.stdout = old_stdout
     
     embedding_func = get_embedding_func()
     print("[✓] Qwen embedding model loaded\n")
-    return embedding_model, embedding_func
+    return embedding_func
 
 def get_next_session_id() -> str:
     SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
@@ -147,7 +148,6 @@ async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id
             print(f"[✓] Chunks reference saved to document {doc_id}\n")
         
         num_pages = text.count("=== Page")
-        summary = f"File: {filename}\nPages: {num_pages}\nSize: {len(text)} chars"
         
         # Update session document list
         session_docs_file = session_dir / "documents.json"
@@ -192,8 +192,8 @@ async def lifespan(app: FastAPI):
     # Startup - EXACT SAME as main_openrouter.py main()
     print("[*] Initializing system...")
     
-    # Load embedding model - EXACT SAME
-    embedding_model, embedding_func = _load_embedding_model()
+    # Load embedding model
+    embedding_func = _load_embedding_model()
     
     # Create RAG - EXACT SAME
     rag_instance = LightRAG(
@@ -422,105 +422,38 @@ async def delete_document(session_id: str, doc_id: str):
         return JSONResponse(content={"success": False, "error": str(e)})
 
 async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
-    """Search chunks - ONLY from the selected document"""
-    session_dir = SESSIONS_DIR / session_id
-    doc_chunks_path = session_dir / "documents" / doc_id / "chunks.json"
-    
-    if not doc_chunks_path.exists():
-        print(f"[!] Chunks file not found for doc {doc_id}: {doc_chunks_path}")
-        return []
-    
+    """Search chunks using lenient algorithm from search_logic.py"""
     try:
-        with open(doc_chunks_path) as f:
-            data = json.load(f)
-            # FILTER chunks by doc_id marker - STRICT filtering
-            chunks = []
-            total_chunks = len(data)
-            for chunk_id, item in data.items():
-                if isinstance(item, dict) and 'content' in item:
-                    content = item['content']
-                    # Only include chunks from THIS document
-                    if f"[DOC_ID:{doc_id}]" in content:
-                        # Remove the doc_id marker before returning
-                        content = content.replace(f"[DOC_ID:{doc_id}]\n", "")
-                        chunks.append(content)
-        
-        if not chunks:
-            print(f"[!] No chunks found for document {doc_id} (checked {total_chunks} total chunks)")
-            print(f"[!] Looking for marker: [DOC_ID:{doc_id}]")
-            return []
-        
-        print(f"[*] Searching {len(chunks)} chunks (of {total_chunks} total) in document {doc_id}...", end='', flush=True)
-        
-        # Semantic search - USE AWAIT for async embedding function
-        import numpy as np
-        query_embeddings = await embedding_func.func([query])
-        query_embedding = query_embeddings[0]
-        
-        scores = []
-        query_lower = query.lower()
-        query_terms = [w for w in query_lower.split() if len(w) > 3]
-        
-        # Embed all chunks at once for efficiency
-        chunk_samples = [c[:500] for c in chunks]
-        chunk_embeddings_list = await embedding_func.func(chunk_samples)
-        
-        for i, chunk in enumerate(chunks):
-            try:
-                chunk_embedding = chunk_embeddings_list[i]
-                
-                # Semantic similarity
-                similarity = np.dot(query_embedding, chunk_embedding) / (
-                    np.linalg.norm(query_embedding) * np.linalg.norm(chunk_embedding) + 1e-8
-                )
-                
-                # Lexical boost
-                chunk_lower = chunk.lower()
-                lexical_boost = 1.0
-                for term in query_terms:
-                    if term in chunk_lower:
-                        lexical_boost += 0.15
-                
-                final_score = similarity * lexical_boost
-                scores.append(final_score)
-            except Exception as e:
-                scores.append(0)
-        
-        # Get top chunks with filtering
-        import numpy as np
-        scores_array = np.array(scores)
-        
-        # Filter: only keep chunks with score > 0.10 (slightly more lenient for better coverage)
-        valid_indices = np.where(scores_array > 0.10)[0]
-        
-        if len(valid_indices) > 0:
-            # Sort valid chunks by score, take top 10 (increased from 5 for better context)
-            valid_scores = [(idx, scores_array[idx]) for idx in valid_indices]
-            valid_scores.sort(key=lambda x: x[1], reverse=True)
-            top_indices = [idx for idx, _ in valid_scores[:10]]
-        else:
-            # Fallback: if no good matches, take top 10 chunks by score (increased from 5)
-            top_indices = np.argsort(-scores_array)[:10]
-        
-        best_chunks = [chunks[i] for i in top_indices if i < len(chunks)]
-        best_scores = [scores[i] for i in top_indices if i < len(scores)]
-        
-        print(f" Found {len(best_chunks)} chunks, scores: {[f'{s:.2f}' for s in best_scores]}", flush=True)
+        # Call the optimized search function from search_logic
+        best_chunks = await search_chunks_strict(
+            query=query,
+            session_id=session_id,
+            doc_id=doc_id,
+            SESSIONS_DIR=SESSIONS_DIR,
+            WORKING_DIR=WORKING_DIR
+        )
         
         if not best_chunks:
+            print(f"[!] No chunks found for query: {query[:50]}", flush=True)
             return []
         
-        # Combine chunks with newline separator (not double newline to avoid padding)
+        # Combine chunks with newline separator
         combined = "\n".join(best_chunks)
         combined = combined.replace('=== Page', '').replace('===', '').strip()
         
-        # IMPORTANT: Limit context length to avoid overwhelming LLM
-        # Increased to 3000 chars for better multi-page/table coverage
-        max_context_len = 3000
+        # Limit context length - INCREASED for better coverage
+        # For section/table queries: up to 15000 chars
+        # For general queries: 10000 chars
+        if any(w in query.lower() for w in ['menimbang', 'mengingat', 'menetapkan', 'tabel', 'daftar']):
+            max_context_len = 15000  # More for section/table queries
+        else:
+            max_context_len = 10000  # Standard for other queries
+        
         if len(combined) > max_context_len:
             combined = combined[:max_context_len]
             print(f"[*] Context truncated to {max_context_len} chars")
         
+        print(f"[*] Found {len(best_chunks)} chunks, context: {len(combined)} chars", flush=True)
         return [{'content': combined}]
     
     except Exception as e:
@@ -551,9 +484,7 @@ async def query_pdf(request: QueryRequest):
             t_total_start = time.time()
             
             # Search chunks from SELECTED DOCUMENT ONLY
-            t_search_start = time.time()
             chunks = await search_chunks_from_session(session_id, doc_id, question)
-            t_search = time.time() - t_search_start
             
             if not chunks:
                 answer = "Konten dokumen tidak mencukupi untuk menjawab pertanyaan ini. Mohon tanyakan dengan kata kunci lain."
@@ -565,28 +496,24 @@ async def query_pdf(request: QueryRequest):
             # For short context: return directly
             if len(context) < 600:
                 answer = context
+            # Check for greeting-only questions
+            elif question.lower().strip() in ['hai', 'halo', 'hi', 'hello', 'assalamu\'alaikum', 'pagi', 'siang', 'sore', 'malam']:
+                answer = "Halo! Ada yang bisa saya bantu tentang dokumen ini?"
             else:
-                # For longer context: use LLM with STRICTER prompt
-                system_prompt = """Kamu adalah assistant yang HANYA menjawab berdasarkan dokumen yang diberikan. 
-PENTING: 
-- Jangan tambah informasi dari pengetahuan umum
-- Jawab TEPAT dan AKURAT sesuai dokumen
-- Jika ada TABEL dalam dokumen, PRESERVE struktur tabel dengan format yang jelas (gunakan markdown table atau text)
-- Jika ditanyakan point/item spesifik (A, B, C, dll), jawab HANYA point yang diminta, bukan yang lain
-- Jawab ringkas namun lengkap"""
+                # For longer context: use LLM with focused prompt
+                system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
+ATURAN UTAMA:
+1. Jawab TEPAT apa yang ditanya, JANGAN tambah informasi tidak diminta
+2. Jika ditanya tabel: JELASKAN tabel tersebut dengan rinci (daftar item, kolom penting)
+3. Jika ditanya bagian spesifik (Menimbang/Mengingat/etc): LIST SEMUA POIN dengan nomor/huruf
+4. Jika ditanya point spesifik (point 2, point a, etc): HANYA jawab point itu saja
+5. Jawab dari dokumen saja, jangan tambah pengetahuan umum
+6. JANGAN tambah kesimpulan atau summary tidak diminta"""
 
                 answer_prompt = f"""Pertanyaan: {question}
 
 Konteks dari dokumen:
 {context}
-
-INSTRUKSI JAWABAN:
-- Jawab HANYA berdasarkan konteks di atas
-- Jika ada TABEL, format dengan baik (markdown atau text table)
-- Jika ditanyakan point/item spesifik, jawab TEPAT point tersebut
-- Jangan tambah informasi dari pengetahuan umum
-- Jika jawaban tidak ada di konteks, katakan "Informasi tidak tersedia dalam dokumen"
-- Jawab dengan singkat dan jelas
 
 Jawaban:"""
                 

@@ -27,6 +27,36 @@ logging.getLogger("easyocr").setLevel(logging.ERROR)
 from raganything.config import RAGAnythingConfig
 from embedding_qwen import load_embedding_model, get_embedding_func
 from llm_openrouter import llm_model_func_openrouter
+
+# Configure pytesseract for Tesseract OCR (if installed)
+try:
+    import pytesseract
+    # Try common installation paths on Windows
+    possible_paths = [
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        r"C:\ProgramData\chocolatey\lib\tesseract\tools\tesseract.exe",
+    ]
+    
+    tesseract_found = False
+    for path in possible_paths:
+        if os.path.exists(path):
+            pytesseract.pytesseract.pytesseract_path = path
+            print(f"    [*] Tesseract configured at: {path}", flush=True)
+            
+            # Also add to PATH environment for subprocess calls
+            tesseract_dir = os.path.dirname(path)
+            if tesseract_dir not in os.environ['PATH']:
+                os.environ['PATH'] = tesseract_dir + os.pathsep + os.environ['PATH']
+            
+            tesseract_found = True
+            break
+    
+    if not tesseract_found:
+        print(f"    [!] Tesseract not found in common paths", flush=True)
+except Exception as e:
+    print(f"    [!] Tesseract config warning: {str(e)[:100]}", flush=True)
+
 # Defer LightRAG import - only load when main() is called
 # from lightrag import LightRAG, QueryParam
 # Defer numpy - only load when needed for search
@@ -117,64 +147,146 @@ def _process_single_page(args: Tuple[int, object]) -> Tuple[int, str]:
         return (page_num, f"=== Page {page_num} ===\n[Error: {str(e)}]")
 
 def extract_text_from_pdf_with_ocr(pdf_path, use_ocr=True):
-    """Extract text from PDF using parallel easyocr processing"""
-    from pdf2image import convert_from_path  # Defer import - only load when needed
-    reader = _load_ocr_model()
-    if not use_ocr or not reader:
+    """
+    HYBRID TEXT EXTRACTION - 3-Layer Strategy for Speed & Accuracy
+    Layer 1: Extract text layer (INSTANT - 0.1s)
+    Layer 2: Tesseract OCR (FAST - 10-15s)  
+    Layer 3: EasyOCR (ACCURATE - 69s fallback)
+    """
+    import time as timing_module
+    
+    if not use_ocr:
         return ""
     
     try:
-        t_start = time.time()
-        print(f"    Converting PDF to images...", end='', flush=True)
+        print(f"\n    [*] Extracting text from PDF...", flush=True)
+        t_total_start = timing_module.time()
         
-        # Get OCR workers configuration
+        # ===== LAYER 1: TRY EXTRACT TEXT LAYER (pdfplumber) =====
+        print(f"    Layer 1: Checking for text layer...", end='', flush=True)
+        t_layer1 = timing_module.time()
+        try:
+            import pdfplumber
+            with pdfplumber.open(pdf_path) as pdf:
+                text_parts = []
+                page_count = len(pdf.pages)
+                
+                for page_num, page in enumerate(pdf.pages, 1):
+                    page_text = page.extract_text()
+                    if page_text and page_text.strip():
+                        text_parts.append(page_text)
+                
+                if text_parts and len(text_parts) > page_count * 0.7:  # At least 70% pages have text
+                    final_text = "\n\n".join(text_parts)
+                    t_layer1_elapsed = timing_module.time() - t_layer1
+                    print(f" ✅ FOUND! ({t_layer1_elapsed:.2f}s)")
+                    print(f"    ✓ Extracted {len(text_parts)}/{page_count} pages with text layer")
+                    return final_text
+                else:
+                    print(f" ❌ No text layer (scanned PDF)")
+        except Exception as e:
+            print(f" ❌ Error: {str(e)[:50]}")
+        
+        # ===== LAYER 2: TRY TESSERACT OCR (Fast) =====
+        print(f"    Layer 2: Trying Tesseract OCR...", end='', flush=True)
+        t_layer2 = timing_module.time()
+        try:
+            import pytesseract
+            from pdf2image import convert_from_path
+            
+            # Ensure pytesseract path is set (double-check)
+            if not pytesseract.pytesseract.pytesseract_path:
+                possible_paths = [
+                    r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                    r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                ]
+                for path in possible_paths:
+                    if os.path.exists(path):
+                        pytesseract.pytesseract.pytesseract_path = path
+                        break
+            
+            # Read DPI from environment variable with default 200
+            pdf_dpi = int(os.environ.get('PDF_DPI', '200'))
+            print(f"\n    Using PDF_DPI={pdf_dpi} (from .env)", flush=True)
+            images = convert_from_path(pdf_path, dpi=pdf_dpi)
+            
+            text_parts = []
+            page_count = len(images)
+            
+            for page_num, image in enumerate(images, 1):
+                try:
+                    # Tesseract config untuk maximum accuracy pada digits dan text
+                    # --psm 6: Assume uniform block of text (best for tables/documents)
+                    # --oem 3: Both legacy and neural engine (better accuracy)
+                    # Add whitelist untuk improve digit recognition
+                    config = '--psm 6 --oem 3 -c tessedit_char_whitelist=0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:- '
+                    
+                    try:
+                        page_text = pytesseract.image_to_string(image, lang='ind+eng', config=config)
+                    except:
+                        # Fallback if ind not available
+                        page_text = pytesseract.image_to_string(image, lang='eng', config=config)
+                    if page_text:
+                        text_parts.append(page_text)
+                except Exception as e:
+                    print(f"\n    [!] Tesseract page {page_num} error: {str(e)[:50]}")
+            
+            if text_parts:
+                final_text = "\n\n".join(text_parts)
+                t_layer2_elapsed = timing_module.time() - t_layer2
+                print(f" ✅ SUCCESS! ({t_layer2_elapsed:.2f}s)")
+                print(f"    ✓ Extracted {len(text_parts)}/{page_count} pages with Tesseract")
+                return final_text
+            else:
+                print(f" ❌ No text extracted")
+        except ImportError:
+            print(f" ❌ Tesseract not installed")
+        except Exception as e:
+            print(f" ❌ Error: {str(e)[:50]}")
+        
+        # ===== LAYER 3: FALLBACK TO EASYOCR (Accurate) =====
+        print(f"    Layer 3: Fallback to EasyOCR (accurate)...", end='', flush=True)
+        t_layer3 = timing_module.time()
+        
+        reader = _load_ocr_model()
+        if not reader:
+            print(f" ❌ EasyOCR model not available")
+            return ""
+        
+        from pdf2image import convert_from_path
         ocr_workers = int(os.getenv('OCR_WORKERS', '4'))
         pdf_dpi = int(os.getenv('PDF_DPI', '150'))
         
         images = convert_from_path(pdf_path, dpi=pdf_dpi)
-        t_convert = time.time() - t_start
-        print(f" {len(images)} pages [{t_convert:.2f}s]")
-        
-        # Prepare page list with indices
         page_list = list(enumerate(images, 1))
         
         text_content = {}
-        t_ocr_start = time.time()
-        
-        # Parallel OCR processing using ThreadPoolExecutor
-        print(f"    Running parallel OCR with {ocr_workers} workers...")
         with ThreadPoolExecutor(max_workers=ocr_workers) as executor:
-            # Submit all pages to executor
             futures = [executor.submit(_process_single_page, (page_num, image)) 
                       for page_num, image in page_list]
             
-            # Collect results as they complete
-            completed = 0
             for future in futures:
                 try:
                     page_num, page_content = future.result()
                     text_content[page_num] = page_content
-                    completed += 1
                 except Exception as e:
                     print(f"\n    [!] Error processing page: {e}")
         
-        t_ocr = time.time() - t_ocr_start
-        
-        # Calculate per-page timing
-        per_page_avg = t_ocr / len(images) if images else 0
-        
-        # Sort by page number and join
         if text_content:
             sorted_pages = [text_content[page_num] for page_num in sorted(text_content.keys())]
             final_text = "\n\n".join(sorted_pages)
-            print(f"    ✓ Extracted {len(text_content)} pages [{t_ocr:.2f}s, {per_page_avg:.2f}s/page]")
+            t_layer3_elapsed = timing_module.time() - t_layer3
+            print(f" ✅ SUCCESS! ({t_layer3_elapsed:.2f}s)")
+            print(f"    ✓ Extracted {len(text_content)} pages with EasyOCR")
             return final_text
         else:
-            print(f"    No text found in PDF")
+            print(f" ❌ No text extracted")
             return ""
-    
+        
     except Exception as e:
-        print(f"\n[!] OCR error: {e}")
+        print(f"\n[!] Hybrid extraction error: {e}")
+        import traceback
+        traceback.print_exc()
         return ""
 
 async def ingest_documents(rag):
