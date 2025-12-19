@@ -306,5 +306,133 @@ async sendMessage() {
     this.elements.input.disabled = !enable;
     this.elements.sendBtn.disabled = !enable;
     if (enable) this.elements.input.focus();
+  },
+
+  // ==================== SUMMARY DISPLAY METHODS ====================
+  
+  showGeneratingSummary() {
+    const container = document.createElement('div');
+    container.id = 'generatingSummary';
+    container.className = 'generating-summary';
+    container.innerHTML = `
+      <div class="spinner"></div>
+      <span class="generating-summary-text">📝 Sedang membuat ringkasan dokumen...</span>
+    `;
+    this.elements.messages.appendChild(container);
+    this.scrollToBottom();
+  },
+
+  hideGeneratingSummary() {
+    const element = document.getElementById('generatingSummary');
+    if (element) {
+      element.style.opacity = '0';
+      element.style.transform = 'translateY(-10px)';
+      element.style.transition = 'all 0.3s ease';
+      setTimeout(() => element.remove(), 300);
+    }
+  },
+
+  async showSummaryCard(summary, fileName) {
+    // Remove generating indicator
+    this.hideGeneratingSummary();
+    
+    await Utils.sleep(200);
+    
+    // Create summary card
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    card.id = 'summaryCard';
+    
+    // Parse summary to HTML
+    const summaryHtml = marked.parse(summary);
+    
+    card.innerHTML = `
+      <div class="summary-card-header">
+        <span class="summary-card-icon">📋</span>
+        <div>
+          <div class="summary-card-title">Ringkasan Dokumen</div>
+          <div class="summary-card-subtitle">${fileName}</div>
+        </div>
+      </div>
+      <div class="summary-card-content" id="summaryContent">
+        ${summaryHtml}
+      </div>
+      <div class="summary-card-footer">
+        <div class="summary-ready-badge">
+          <span class="checkmark">✓</span>
+          <span>Siap menerima pertanyaan</span>
+        </div>
+      </div>
+    `;
+    
+    this.elements.messages.appendChild(card);
+    this.scrollToBottom();
+    
+    // Animate typing effect (optional - for dramatic effect)
+    await Utils.sleep(500);
+    
+    return card;
+  },
+
+  // Method to display summary with typing animation
+  async showSummaryWithTyping(summary, fileName) {
+    this.hideGeneratingSummary();
+    await Utils.sleep(200);
+    
+    // Create summary card without content first
+    const card = document.createElement('div');
+    card.className = 'summary-card';
+    card.id = 'summaryCard';
+    
+    card.innerHTML = `
+      <div class="summary-card-header">
+        <span class="summary-card-icon">📋</span>
+        <div>
+          <div class="summary-card-title">Ringkasan Dokumen</div>
+          <div class="summary-card-subtitle">${fileName}</div>
+        </div>
+      </div>
+      <div class="summary-card-content" id="summaryContent">
+        <span class="summary-typing"></span>
+      </div>
+    `;
+    
+    this.elements.messages.appendChild(card);
+    this.scrollToBottom();
+    
+    // Type out the summary
+    const contentEl = document.getElementById('summaryContent');
+    const typingSpan = contentEl.querySelector('.summary-typing');
+    
+    // Split into words for faster "typing"
+    const words = summary.split(' ');
+    let currentText = '';
+    
+    for (let i = 0; i < words.length; i++) {
+      currentText += (i === 0 ? '' : ' ') + words[i];
+      typingSpan.textContent = currentText;
+      this.scrollToBottom();
+      
+      // Random delay between words (15-40ms)
+      await Utils.sleep(Math.random() * 25 + 15);
+    }
+    
+    // Remove typing cursor and show final HTML
+    await Utils.sleep(300);
+    contentEl.innerHTML = marked.parse(summary);
+    
+    // Add footer with ready badge
+    const footer = document.createElement('div');
+    footer.className = 'summary-card-footer';
+    footer.innerHTML = `
+      <div class="summary-ready-badge">
+        <span class="checkmark">✓</span>
+        <span>Siap menerima pertanyaan</span>
+      </div>
+    `;
+    card.appendChild(footer);
+    
+    this.scrollToBottom();
+    return card;
   }
 };

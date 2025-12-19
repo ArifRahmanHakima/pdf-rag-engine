@@ -1,6 +1,7 @@
 import os
 import asyncio
 import hashlib
+import json
 from dotenv import load_dotenv
 from raganything import RAGAnything, RAGAnythingConfig
 from lightrag import LightRAG
@@ -164,9 +165,10 @@ async def generate_summary(file_path: str, doc_id: str):
         
         summary = result if isinstance(result, str) else result.get("text", "")
         
-        # Jika summary kosong atau terlalu pendek, buat fallback
-        if not summary or len(summary) < 50:
-            summary = f"Dokumen {filename} telah berhasil diproses dan siap untuk ditanyakan."
+        # Jika summary kosong, terlalu pendek, atau no-context, gunakan fallback
+        if not summary or len(summary) < 50 or "[no-context]" in summary.lower():
+            print(f"⚠️ Summary not good, trying fallback...")
+            summary = await generate_summary_fallback(doc_id, filename)
         
         print(f"✅ Summary generated: {summary[:100]}...")
         
@@ -176,7 +178,50 @@ async def generate_summary(file_path: str, doc_id: str):
         print(f"❌ Error generating summary: {e}")
         import traceback
         traceback.print_exc()
-        return f"Dokumen {os.path.basename(file_path)} berhasil diproses."
+        return f"Dokumen {os.path.basename(file_path)} berhasil diproses dan siap untuk ditanyakan."
+
+
+async def generate_summary_fallback(doc_id: str, filename: str):
+    """Fallback untuk generate summary langsung dari content"""
+    try:
+        base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+        doc_working_dir = os.path.join(base_dir, doc_id)
+        kv_file = os.path.join(doc_working_dir, "kv_store_full_docs.json")
+        
+        if os.path.exists(kv_file):
+            with open(kv_file, "r", encoding="utf-8") as f:
+                docs = json.load(f)
+            
+            if docs:
+                # Get first document content
+                doc_key = list(docs.keys())[0]
+                content = docs[doc_key].get("content", "")
+                
+                if content:
+                    # Truncate content for summary
+                    content_truncated = content[:4000]
+                    
+                    # Call LLM directly
+                    prompt = f"""Berikan ringkasan singkat dalam bahasa Indonesia tentang dokumen berikut dalam 3-5 kalimat. 
+Fokus pada topik utama dan poin-poin penting.
+
+Nama file: {filename}
+
+Konten dokumen:
+{content_truncated}
+
+Ringkasan:"""
+                    
+                    response = await llm_model_func(prompt)
+                    
+                    if response and len(response) > 30:
+                        return response.strip()
+        
+        return f"📄 Dokumen **{filename}** telah berhasil diproses. Dokumen ini siap untuk ditanyakan. Silakan ajukan pertanyaan tentang isi dokumen ini."
+        
+    except Exception as e:
+        print(f"❌ Error in fallback summary: {e}")
+        return f"📄 Dokumen **{filename}** telah berhasil diproses dan siap untuk ditanyakan."
 
 # === QUERY SPECIFIC DOCUMENT ===
 async def query_document(doc_id: str, question: str, top_k: int = 3):

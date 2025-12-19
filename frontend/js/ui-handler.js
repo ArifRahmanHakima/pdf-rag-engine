@@ -400,17 +400,18 @@ async processPDF(file) {
         this.addToChatList(file.name, uploadResult.doc_id);
       }
       
-      // Show summary if available
+      // Show summary with enhanced display
       if (uploadResult && uploadResult.summary) {
-        const summaryHtml = Utils.parseMarkdown(`📋 **Ringkasan Dokumen:**\n\n${uploadResult.summary}`);
-        ChatHandler.addMessage('bot', summaryHtml, true);
+        // Use the new summary card with typing animation
+        await ChatHandler.showSummaryWithTyping(uploadResult.summary, file.name);
+        await Utils.sleep(500); // Wait for animation to complete
+      } else {
+        // If no summary, show simple welcome message
+        const welcomeMsg = `📄 Dokumen "${file.name}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
+        ChatHandler.addMessage('bot', welcomeMsg);
       }
       
-      // Add welcome message
-      const welcomeMsg = `Halo! Dokumen "${file.name}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
-      ChatHandler.addMessage('bot', welcomeMsg);
-      
-      // Enable input
+      // Enable input AFTER summary is fully displayed
       ChatHandler.enableInput(true);
       
       // ✅ Simpan chat history untuk dokumen ini (termasuk summary)
@@ -488,6 +489,10 @@ async processPDF(file) {
               
               // Step 4: Ready
               this.updateProcessingStep({ step: 'ready', progress: 100, status: 'completed' });
+              await Utils.sleep(300);
+              
+              // Show generating summary indicator in chat
+              ChatHandler.showGeneratingSummary();
               await Utils.sleep(500);
               
               resolve(response);
