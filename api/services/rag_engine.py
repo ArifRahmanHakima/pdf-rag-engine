@@ -1,43 +1,47 @@
+
 import os
 import sys
 import asyncio
 import hashlib
 from dotenv import load_dotenv
 
-# Fix Windows Store Python path issue with pipmaster
-# We need to set a fake executable path that exists
-# This must be done BEFORE importing lightrag/raganything
+
+# Perbaikan path Python jika menggunakan Windows Store
 _original_executable = sys.executable
 if 'WindowsApps' in sys.executable:
-    # Find actual python.exe
     import shutil
     python_path = shutil.which('python')
     if python_path:
         sys.executable = python_path
         os.environ['PIPMASTER_PYTHON'] = python_path
 
-# Now safe to import
+
+# Import library utama untuk RAG dan utilitas
 from raganything import RAGAnything, RAGAnythingConfig
 from lightrag import LightRAG
 from sentence_transformers import SentenceTransformer
 from lightrag.utils import EmbeddingFunc
 from api.services.llm_wrapper import llm_model_func, vision_model_func
 from api.services.timer import ProcessTimer, Timer
+from api.services.pdf_detector import PDFTypeDetector
 
-# Restore original executable
+
 sys.executable = _original_executable
-
 load_dotenv()
 
-# Disable verbose timing for embedding (terlalu banyak noise)
+# Nonaktifkan verbose timer agar log tidak terlalu banyak
 Timer.set_verbose(False)
 
-# === Load Embedding Model ===
-print("⏳ Loading embedding model...")
+
+# ========================================
+# PEMUATAN MODEL EMBEDDING
+# ========================================
+print("⏳ Memuat model embedding...")
 _embed_start = __import__('time').perf_counter()
 embed_model = SentenceTransformer(os.getenv("EMBEDDING_MODEL"))
-print(f"✅ Embedding model loaded in {__import__('time').perf_counter() - _embed_start:.2f}s")
+print(f"✅ Model embedding berhasil dimuat dalam {__import__('time').perf_counter() - _embed_start:.2f}s")
 
+# Fungsi embedding asinkron
 async def async_embed(texts):
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(
@@ -45,90 +49,118 @@ async def async_embed(texts):
         lambda: embed_model.encode(texts, normalize_embeddings=True, batch_size=32)
     )
 
+# Objek embedding_func digunakan untuk menghasilkan vektor embedding dari teks
 embedding_func = EmbeddingFunc(
     embedding_dim=384,
     max_token_size=512,
     func=async_embed
 )
 
-# === Dictionary untuk menyimpan RAG instance per dokumen ===
-rag_instances = {}
+
+# ========================================
+# INSTANSI RAG & CACHE ANALISIS PDF
+# ========================================
+rag_instances = {}  # Menyimpan instance RAG untuk tiap dokumen
+pdf_analysis_cache = {}  # Cache hasil analisis tipe PDF
+
 
 def get_doc_id(file_path: str) -> str:
-    """Generate unique document ID from filename only (not full path)"""
-    # Ambil nama file saja, bukan full path
-    filename = os.path.basename(file_path)
-    # Gunakan hash untuk ID yang konsisten
-    return hashlib.md5(filename.encode()).hexdigest()[:16]
+    """
+    Menghasilkan ID dokumen unik berdasarkan hash isi file.
+    Ini memastikan file yang sama akan memiliki doc_id yang sama meskipun namanya berbeda.
+    """
+    try:
+        # Membaca 1MB pertama untuk hash (lebih cepat dari seluruh file)
+        with open(file_path, 'rb') as f:
+            file_bytes = f.read(1024 * 1024)  # 1MB
+        # Hash gabungan isi file + nama file
+        filename = os.path.basename(file_path)
+        combined = file_bytes + filename.encode()
+        return hashlib.md5(combined).hexdigest()[:16]
+    except Exception as e:
+        print(f"⚠️ Gagal hash file, fallback ke nama file: {e}")
+        filename = os.path.basename(file_path)
+        return hashlib.md5(filename.encode()).hexdigest()[:16]
+
 
 def check_document_exists(doc_id: str) -> bool:
-    """Check if document has been processed before (storage exists)"""
+    """
+    Mengecek apakah dokumen sudah pernah diproses (ada file hasil proses di foldernya)
+    """
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
     doc_working_dir = os.path.join(base_dir, doc_id)
-    
-    # Check if essential files exist
     graph_file = os.path.join(doc_working_dir, "graph_chunk_entity_relation.graphml")
     vdb_chunks_file = os.path.join(doc_working_dir, "vdb_chunks.json")
-    
-    # Dokumen dianggap ada jika ada graph file ATAU vdb_chunks
     return os.path.exists(graph_file) or os.path.exists(vdb_chunks_file)
 
+
 def check_has_content(doc_id: str) -> bool:
-    """Check if document has actual content (entities/chunks)"""
+    """
+    Mengecek apakah dokumen memiliki konten hasil proses (misal: vdb_chunks.json berisi data)
+    """
     import json
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
     doc_working_dir = os.path.join(base_dir, doc_id)
-    
     vdb_chunks_file = os.path.join(doc_working_dir, "vdb_chunks.json")
-    
     try:
         if os.path.exists(vdb_chunks_file):
             with open(vdb_chunks_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                # Check if there are any chunks
                 if isinstance(data, dict) and len(data) > 0:
                     return True
                 elif isinstance(data, list) and len(data) > 0:
                     return True
     except:
         pass
-    
     return False
 
-def get_rag_instance(doc_id: str):
-    """Get or create RAG instance for specific document"""
+
+def get_rag_instance(doc_id: str, file_path: str = None):
+    """
+    Mengambil atau membuat instance RAG untuk dokumen tertentu.
+    Otomatis memilih parser berdasarkan hasil analisis PDF.
+    """
     if doc_id not in rag_instances:
         with Timer(f"Create RAG Instance ({doc_id})"):
-            # Buat working directory khusus untuk dokumen ini
             base_dir = os.getenv("WORKING_DIR", "./rag_storage")
             doc_working_dir = os.path.join(base_dir, doc_id)
-            
-            # Pastikan directory ada
             os.makedirs(doc_working_dir, exist_ok=True)
-            
+            # Deteksi parser secara otomatis
+            parser = "auto"
+            pdf_analysis = None
+            if file_path and os.path.exists(file_path):
+                # Cek cache analisis
+                if doc_id in pdf_analysis_cache:
+                    pdf_analysis = pdf_analysis_cache[doc_id]
+                    print(f"📋 Menggunakan hasil analisis cache untuk {doc_id}")
+                else:
+                    print(f"\n🔍 Menganalisis tipe PDF...")
+                    detector = PDFTypeDetector()
+                    pdf_analysis = detector.analyze_pdf(file_path)
+                    pdf_analysis_cache[doc_id] = pdf_analysis
+                    detector.print_analysis(pdf_analysis)
+                parser = pdf_analysis['recommended_parser']
+                print(f"✅ Parser: {parser} ({PDFTypeDetector.get_parser_description(parser)})")
+            # Konfigurasi RAGAnythingConfig
             config = RAGAnythingConfig(
                 working_dir=doc_working_dir,
-                parser="mineru",
+                parser=parser,
                 parse_method="auto",
-                enable_image_processing=False,
-                enable_table_processing=False,
-                enable_equation_processing=False,
+                enable_image_processing=pdf_analysis.get('has_images', True) if pdf_analysis else True,
+                enable_table_processing=False,  # Nonaktifkan pemrosesan tabel
+                enable_equation_processing=False,  # Nonaktifkan pemrosesan persamaan
             )
-            
-            # Check if document was processed before
             document_exists = check_document_exists(doc_id)
-            
             if document_exists:
-                # Document exists, initialize with LightRAG so we can query
-                print(f"📂 Loading existing document: {doc_id}")
-                
+                print(f"📂 Memuat dokumen yang sudah ada: {doc_id}")
                 with Timer(f"Load LightRAG ({doc_id})"):
                     lightrag_instance = LightRAG(
                         working_dir=doc_working_dir,
                         llm_model_func=llm_model_func,
                         embedding_func=embedding_func,
+                        # entity_extract_max_gleaning=1,  # Kurangi ekstraksi entity
+                        # enable_local_query=True,
                     )
-                
                 rag_instances[doc_id] = RAGAnything(
                     config=config,
                     llm_model_func=llm_model_func,
@@ -136,255 +168,295 @@ def get_rag_instance(doc_id: str):
                     embedding_func=embedding_func,
                     lightrag=lightrag_instance,
                 )
-                print(f"✅ RAG instance loaded with LightRAG for doc_id: {doc_id}")
+                print(f"✅ RAG berhasil dimuat: {doc_id}")
             else:
-                # New document, create without LightRAG (will be initialized during processing)
                 rag_instances[doc_id] = RAGAnything(
                     config=config,
                     llm_model_func=llm_model_func,
                     vision_model_func=vision_model_func,
                     embedding_func=embedding_func,
                 )
-                print(f"✅ RAG instance created for doc_id: {doc_id}")
-            
-            print(f"📂 Working directory: {doc_working_dir}")
-    
+                print(f"✅ RAG baru dibuat: {doc_id}")
+            # Simpan hasil analisis di instance
+            if pdf_analysis:
+                rag_instances[doc_id]._pdf_analysis = pdf_analysis
+            print(f"📂 Working dir: {doc_working_dir}")
     return rag_instances[doc_id]
 
-# === WRAPPER PROCESS PDF ===
+
+# ========================================
+# PARSING CEPAT UNTUK PDF TEKS
+# ========================================
+async def fast_parse_small_document(file_path: str, doc_id: str) -> str:
+    """
+    Parsing cepat untuk PDF yang hanya berisi teks (menggunakan PyMuPDF/fitz).
+    Hasil parsing disimpan ke file content.md.
+    """
+    try:
+        import fitz
+        print("🚀 Parsing cepat dengan PyMuPDF...")
+        doc = fitz.open(file_path)
+        content = ""
+        for page_num, page in enumerate(doc):
+            content += f"\n--- Page {page_num + 1} ---\n"
+            content += page.get_text()
+        doc.close()
+        base_dir = os.getenv("WORKING_DIR", "./rag_storage")
+        doc_working_dir = os.path.join(base_dir, doc_id)
+        os.makedirs(doc_working_dir, exist_ok=True)
+        md_file = os.path.join(doc_working_dir, "content.md")
+        with open(md_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+        print(f"✅ Fast parse: {len(content)} karakter")
+        return content
+    except Exception as e:
+        print(f"⚠️ Parsing cepat gagal: {e}")
+        return None
+
+
+# ========================================
+# PROSES PDF
+# ========================================
 async def process_pdf(file_path: str):
-    """Process PDF and store in isolated RAG system with detailed timing"""
+    """
+    Proses utama untuk menganalisis, parsing, dan memproses PDF.
+    - Menganalisis tipe PDF (teks, scan, tabel, dsb).
+    - Jika PDF sederhana (teks), diproses cepat.
+    - Jika tidak, diproses dengan pipeline RAG lengkap.
+    """
     filename = os.path.basename(file_path)
-    doc_id = get_doc_id(filename)
-    
-    # Initialize timer
+    doc_id = get_doc_id(file_path)
     timer = ProcessTimer(f"UPLOAD & PROCESS: {filename}")
     timer.start()
-    
     print(f"🔑 Document ID: {doc_id}")
-    
-    # Step 1: Initialize RAG Instance
-    timer.step("1. Initialize RAG Instance")
-    rag = get_rag_instance(doc_id)
-    
-    # Step 2: Parse PDF with MinerU
-    timer.step("2. Parse PDF (MinerU)")
-    # Note: process_document_complete includes parsing
-    await rag.process_document_complete(
-        file_path=file_path,
-        output_dir=rag.config.working_dir
-    )
-    
-    # Finish and get total time
+    # Langkah 1: Analisis PDF (cache)
+    timer.step("1. PDF Analysis")
+    if doc_id not in pdf_analysis_cache:
+        detector = PDFTypeDetector()
+        analysis = detector.analyze_pdf(file_path)
+        pdf_analysis_cache[doc_id] = analysis
+        detector.print_analysis(analysis)
+    else:
+        analysis = pdf_analysis_cache[doc_id]
+        print(f"📋 Menggunakan hasil analisis cache")
+    # Langkah 2: Parsing cepat untuk PDF teks
+    if analysis['type'] == 'text' and analysis['recommended_parser'] == 'pymupdf':
+        timer.step("2. Fast Parse (PyMuPDF)")
+        content = await fast_parse_small_document(file_path, doc_id)
+        if content:
+            total_time = timer.finish()
+            return doc_id, f"📄 {filename} diproses cepat ({analysis['type']}) - {total_time:.1f}s"
+    # Langkah 3: Proses standar
+    timer.step("2. Initialize RAG")
+    rag = get_rag_instance(doc_id, file_path)
+    pdf_type_emoji = {
+        'text': '📝',
+        'table': '📊',
+        'image': '🖼️',
+        'scan': '📷',
+        'mixed': '📄'
+    }.get(analysis['type'], '📄')
+    timer.step("3. Parse PDF")
+    try:
+        await rag.process_document_complete(
+            file_path=file_path,
+            output_dir=rag.config.working_dir
+        )
+    except Exception as e:
+        print(f"⚠️ Error saat memproses (lanjut): {e}")
+        # Lanjutkan, konten parsial tetap bisa dipakai
     total_time = timer.finish()
-    
-    return doc_id, f"File {filename} berhasil diproses dalam {total_time:.1f} detik"
+    return doc_id, (
+        f"{pdf_type_emoji} {filename} berhasil diproses!\n"
+        f"Tipe: {analysis['type'].upper()}\n"
+        f"Parser: {PDFTypeDetector.get_parser_description(analysis['recommended_parser'])}\n"
+        f"Waktu: {total_time:.1f}s"
+    )
 
-# === GENERATE SUMMARY ===
+
+# ========================================
+# GENERATE SUMMARY (RINGKASAN)
+# ========================================
 async def generate_summary(file_path: str, doc_id: str):
-    """Generate summary from processed PDF with timing"""
+    """
+    Membuat ringkasan dokumen menggunakan LLM.
+    - Mode query disesuaikan dengan tipe PDF (scan → naive, lain → hybrid).
+    - Jika gagal, fallback ke ringkasan dari konten hasil parsing.
+    """
     filename = os.path.basename(file_path)
-    
-    # Initialize timer
     timer = ProcessTimer(f"GENERATE SUMMARY: {filename}")
     timer.start()
-    
     try:
-        # Step 1: Get RAG instance
-        timer.step("3. Get RAG Instance")
-        rag = get_rag_instance(doc_id)
-        
-        # Step 2: Query LLM for summary
-        timer.step("4. LLM Query (Summary)")
-        
+        timer.step("1. Get RAG Instance")
+        rag = get_rag_instance(doc_id, file_path)
+        # Ambil hasil analisis dari cache
+        analysis = pdf_analysis_cache.get(doc_id)
+        # Pilih mode query berdasarkan tipe PDF
+        if analysis and analysis['type'] == 'scan':
+            query_mode = "naive"
+            print(f"📷 PDF hasil scan terdeteksi - gunakan mode naive untuk ringkasan")
+        else:
+            query_mode = "hybrid"
+        timer.step(f"2. LLM Query ({query_mode})")
         summary = ""
-        
         try:
             result = await rag.aquery(
-                f"Berikan ringkasan singkat tentang isi dokumen '{filename}' ini dalam 3-4 kalimat. Jelaskan topik utama dan poin-poin penting yang dibahas dalam dokumen ini.",
-                mode="hybrid",
+                f"Berikan ringkasan singkat tentang isi dokumen '{filename}' ini dalam 3-4 kalimat. Jelaskan topik utama dan poin-poin penting.",
+                mode=query_mode,
                 top_k=5
             )
-            
-            summary = result if isinstance(result, str) else result.get("text", "")
-        except ValueError:
-            # No LightRAG - fallback
-            pass
-        
-        # Handle no-context atau summary yang terlalu pendek/gagal
+            if result:
+                summary = result if isinstance(result, str) else result.get("text", "")
+        except Exception as e:
+            print(f"⚠️ Query RAG gagal: {e}")
+            summary = ""
+        # Fallback jika ringkasan kurang baik
         if not summary or len(summary) < 50 or "[no-context]" in summary.lower() or "sorry" in summary.lower():
-            # Fallback: generate summary dari parsed content
-            print("⚠️ RAG summary failed, using fallback from parsed content...")
-            timer.step("4b. Fallback Summary")
+            print("⚠️ Gunakan fallback summary...")
+            timer.step("3. Fallback Summary")
             summary = await generate_summary_from_content(doc_id, filename)
-        
-        # Finish timer
         timer.finish()
-        
-        print(f"✅ Summary: {summary[:100]}...")
-        
+        if summary:
+            print(f"✅ Summary: {summary[:100]}...")
         return summary
-        
     except Exception as e:
-        print(f"❌ Error generating summary: {e}")
+        print(f"❌ Error generate summary: {e}")
         import traceback
         traceback.print_exc()
-        return f"Dokumen {os.path.basename(file_path)} berhasil diproses."
+        return f"Dokumen {filename} berhasil diproses dan siap untuk ditanyakan."
+
 
 async def generate_summary_from_content(doc_id: str, filename: str):
-    """Generate summary directly from parsed markdown content"""
+    """
+    Fallback: Membuat ringkasan langsung dari isi file markdown hasil parsing.
+    """
     import glob
-    
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
     doc_working_dir = os.path.join(base_dir, doc_id)
-    
-    # Cari file markdown hasil parsing
-    md_files = glob.glob(os.path.join(doc_working_dir, "**", "*.md"), recursive=True)
-    
-    if not md_files:
-        return f"Dokumen '{filename}' berhasil diproses dan siap untuk ditanyakan."
-    
-    # Baca konten markdown
+    content_file = os.path.join(doc_working_dir, "content.md")
     content = ""
-    for md_file in md_files[:3]:
+    if os.path.exists(content_file):
         try:
-            with open(md_file, 'r', encoding='utf-8') as f:
-                content += f.read() + "\n\n"
+            with open(content_file, 'r', encoding='utf-8') as f:
+                content = f.read()
         except:
             pass
-    
+    if not content:
+        md_files = glob.glob(os.path.join(doc_working_dir, "**", "*.md"), recursive=True)
+        for md_file in md_files[:3]:
+            try:
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    content += f.read() + "\n\n"
+            except:
+                pass
     if not content or len(content) < 50:
         return f"Dokumen '{filename}' berhasil diproses dan siap untuk ditanyakan."
-    
-    # Truncate if too long
     max_chars = 3000
     if len(content) > max_chars:
         content = content[:max_chars] + "..."
-    
     try:
-        from api.services.llm_wrapper import llm_model_func
-        
         prompt = f"""Berikan ringkasan singkat tentang isi dokumen berikut dalam 3-4 kalimat. Jelaskan topik utama dan poin-poin penting.
 
 KONTEN DOKUMEN:
 {content}
 
 RINGKASAN:"""
-        
         summary = await llm_model_func(prompt)
-        
-        if summary and len(summary) > 50 and "[no-context]" not in summary.lower():
+        if summary and len(summary) > 50:
             return summary
-            
     except Exception as e:
         print(f"❌ Fallback summary error: {e}")
-    
-    return f"Dokumen '{filename}' berhasil diproses dan siap untuk ditanyakan. Silakan ajukan pertanyaan tentang isi dokumen ini."
+    return f"Dokumen '{filename}' berhasil diproses dan siap untuk ditanyakan."
 
-# === QUERY SPECIFIC DOCUMENT ===
+
+# ========================================
+# QUERY DOCUMENT (TANYA JAWAB)
+# ========================================
 async def query_document(doc_id: str, question: str, top_k: int = 3):
-    """Query specific document by doc_id with timing"""
-    
-    # Initialize timer
+    """
+    Melakukan tanya jawab ke dokumen.
+    - Mode query disesuaikan dengan tipe PDF.
+    - Jika gagal, fallback ke pencarian jawaban dari konten hasil parsing.
+    """
     timer = ProcessTimer(f"QUERY: {question[:40]}...")
     timer.start()
-    
     print(f"📄 Doc ID: {doc_id}")
-    
     try:
-        # Step 1: Get RAG instance
         timer.step("1. Get RAG Instance")
         rag = get_rag_instance(doc_id)
-        
-        # Step 2: RAG Query
-        timer.step("2. RAG Query (hybrid)")
-        
+        # Ambil hasil analisis dari cache untuk memilih mode
+        analysis = pdf_analysis_cache.get(doc_id)
+        if analysis and analysis['type'] == 'scan':
+            query_mode = "naive"
+            print(f"📷 PDF hasil scan - gunakan mode naive")
+        else:
+            query_mode = "hybrid"
+        timer.step(f"2. RAG Query ({query_mode})")
+        answer = ""
         try:
             result = await rag.aquery(
                 question,
-                mode="hybrid",
+                mode=query_mode,
                 top_k=top_k
             )
-            
-            answer = result if isinstance(result, str) else result.get("text", "")
-            
-            # Check if answer is empty or no-context
+            if result:
+                answer = result if isinstance(result, str) else result.get("text", "")
+            # Coba fallback mode jika perlu
             if not answer or "[no-context]" in answer.lower() or len(answer) < 20:
-                # Fallback: coba query dengan mode naive (text only)
-                print("⚠️ Hybrid query returned no context, trying naive mode...")
-                timer.step("2b. RAG Query (naive fallback)")
-                
+                print("⚠️ Coba naive mode...")
+                timer.step("2b. RAG Query (naive)")
                 try:
-                    result = await rag.aquery(
-                        question,
-                        mode="naive",
-                        top_k=top_k
-                    )
-                    answer = result if isinstance(result, str) else result.get("text", "")
-                except:
-                    pass
-                
-                # Jika masih gagal, coba baca langsung dari parsed content
-                if not answer or "[no-context]" in answer.lower() or len(answer) < 20:
+                    result = await rag.aquery(question, mode="naive", top_k=top_k)
+                    if result:
+                        answer = result if isinstance(result, str) else result.get("text", "")
+                except Exception as e:
+                    print(f"⚠️ Query naive gagal: {e}")
+                if not answer or "[no-context]" in answer.lower():
                     answer = await fallback_query_from_parsed_content(doc_id, question)
-            
-        except ValueError as ve:
-            # No LightRAG instance - fallback to parsed content
-            print(f"⚠️ LightRAG not available, using fallback: {ve}")
+        except Exception as e:
+            print(f"⚠️ Error query RAG: {e}")
             answer = await fallback_query_from_parsed_content(doc_id, question)
-        
-        # Final check
         if not answer or "[no-context]" in answer.lower():
-            answer = "Maaf, saya tidak menemukan informasi yang relevan untuk menjawab pertanyaan tersebut dalam dokumen ini. Silakan coba pertanyaan lain."
-        
-        # Finish timer
+            answer = "Maaf, saya tidak menemukan informasi yang relevan untuk menjawab pertanyaan tersebut. Silakan coba pertanyaan lain."
         timer.finish()
-        
-        print(f"✅ Answer: {answer[:100]}...")
-        
+        print(f"✅ Jawaban: {answer[:100]}...")
         return answer
-        
     except Exception as e:
-        print(f"❌ Error querying document {doc_id}: {e}")
+        print(f"❌ Error query dokumen: {e}")
         import traceback
         traceback.print_exc()
         raise e
 
+
 async def fallback_query_from_parsed_content(doc_id: str, question: str):
-    """Fallback: query using parsed markdown content directly"""
-    import os
+    """
+    Fallback: Menjawab pertanyaan langsung dari isi file markdown hasil parsing.
+    """
     import glob
-    
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
     doc_working_dir = os.path.join(base_dir, doc_id)
-    
-    # Cari file markdown hasil parsing
-    md_files = glob.glob(os.path.join(doc_working_dir, "**", "*.md"), recursive=True)
-    
-    if not md_files:
-        return ""
-    
-    # Baca konten markdown
+    content_file = os.path.join(doc_working_dir, "content.md")
     content = ""
-    for md_file in md_files[:3]:  # Limit to first 3 files
+    if os.path.exists(content_file):
         try:
-            with open(md_file, 'r', encoding='utf-8') as f:
-                content += f.read() + "\n\n"
+            with open(content_file, 'r', encoding='utf-8') as f:
+                content = f.read()
         except:
             pass
-    
+    if not content:
+        md_files = glob.glob(os.path.join(doc_working_dir, "**", "*.md"), recursive=True)
+        for md_file in md_files[:3]:
+            try:
+                with open(md_file, 'r', encoding='utf-8') as f:
+                    content += f.read() + "\n\n"
+            except:
+                pass
     if not content:
         return ""
-    
-    # Truncate content if too long
     max_chars = 4000
     if len(content) > max_chars:
         content = content[:max_chars] + "..."
-    
-    # Query LLM directly with the content
     try:
-        from api.services.llm_wrapper import llm_model_func
-        
         prompt = f"""Berdasarkan konten dokumen berikut, jawab pertanyaan dengan bahasa Indonesia yang jelas dan ringkas.
 
 KONTEN DOKUMEN:
@@ -393,41 +465,48 @@ KONTEN DOKUMEN:
 PERTANYAAN: {question}
 
 JAWABAN:"""
-        
         answer = await llm_model_func(prompt)
         return answer
     except Exception as e:
         print(f"❌ Fallback query error: {e}")
         return ""
 
-# === LIST ALL DOCUMENTS ===
+
+# ========================================
+# FUNGSI UTILITAS
+# ========================================
 def list_documents():
-    """List all processed documents"""
+    """
+    Menampilkan daftar dokumen yang sudah diproses.
+    """
     return list(rag_instances.keys())
 
-# === CLEAR DOCUMENT CACHE ===
 def clear_document_cache(doc_id: str = None):
-    """Clear RAG instance cache for specific or all documents"""
+    """
+    Menghapus cache instance RAG dan analisis PDF untuk dokumen tertentu atau semua dokumen.
+    """
     if doc_id:
         if doc_id in rag_instances:
             del rag_instances[doc_id]
-            print(f"🗑️ Cleared cache for doc_id: {doc_id}")
+            print(f"🗑️ Cache dihapus: {doc_id}")
+        if doc_id in pdf_analysis_cache:
+            del pdf_analysis_cache[doc_id]
     else:
         rag_instances.clear()
-        print("🗑️ Cleared all document caches")
+        pdf_analysis_cache.clear()
+        print("🗑️ Semua cache dihapus")
 
-# Alias for backward compatibility
 def clear_rag_instance(doc_id: str):
-    """Alias for clear_document_cache"""
+    """
+    Alias untuk clear_document_cache.
+    """
     clear_document_cache(doc_id)
 
 def clear_root_storage():
-    """Clear old storage files in root rag_storage directory (not in subdirectories)"""
-    import shutil
-    
+    """
+    Menghapus file-file storage utama di direktori kerja RAG.
+    """
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
-    
-    # Files to remove from root (these are leftover from old unified storage)
     root_files = [
         "graph_chunk_entity_relation.graphml",
         "kv_store_doc_status.json",
@@ -443,38 +522,29 @@ def clear_root_storage():
         "vdb_entities.json",
         "vdb_relationships.json"
     ]
-    
     deleted = []
     for filename in root_files:
         filepath = os.path.join(base_dir, filename)
         if os.path.exists(filepath):
             os.remove(filepath)
             deleted.append(filename)
-            print(f"🗑️ Deleted: {filepath}")
-    
     if deleted:
-        print(f"✅ Cleaned up {len(deleted)} old storage files from root directory")
+        print(f"✅ {len(deleted)} file dibersihkan")
     else:
-        print("✅ Root storage is clean")
-    
+        print("✅ Root storage sudah bersih")
     return deleted
 
 def reset_all_storage():
-    """Reset all RAG storage - clear memory and delete all files"""
+    """
+    Menghapus seluruh storage RAG dan membuat ulang direktori kerja.
+    """
     import shutil
-    
-    # Clear memory cache first
     rag_instances.clear()
-    
+    pdf_analysis_cache.clear()
     base_dir = os.getenv("WORKING_DIR", "./rag_storage")
-    
     if os.path.exists(base_dir):
-        # Remove entire directory
         shutil.rmtree(base_dir)
-        print(f"🗑️ Deleted entire storage directory: {base_dir}")
-    
-    # Recreate empty directory
+        print(f"🗑️ Dihapus: {base_dir}")
     os.makedirs(base_dir, exist_ok=True)
-    print(f"✅ Created fresh storage directory: {base_dir}")
-    
+    print(f"✅ Storage baru: {base_dir}")
     return True

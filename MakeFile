@@ -25,3 +25,11 @@ Get-Timing-Summary:
 
 Clear-Timing-Logs:
 	curl -X POST http://localhost:8000/admin/timing/clear
+
+
+	# Install PyMuPDF untuk fast parsing
+pip install PyMuPDF>=1.23.0
+
+# Install backup parsers (optional tapi recommended)
+pip install pypdf>=3.17.0
+pip install pdfplumber>=0.10.0

@@ -9,7 +9,7 @@ def save_document(doc_id: str, file_name: str, file_path: str = None, summary: s
     conn = get_postgres_conn()
     try:
         with conn.cursor() as cur:
-            # Upsert - insert or update if exists
+            # Upsert - insert atau update jika sudah ada
             cur.execute("""
                 INSERT INTO documents (doc_id, file_name, file_path, summary)
                 VALUES (%s, %s, %s, %s)
@@ -95,7 +95,7 @@ def delete_document(doc_id: str):
     conn = get_postgres_conn()
     try:
         with conn.cursor() as cur:
-            # Hapus chat messages dulu (foreign key)
+            # Hapus chat messages terlebih dahulu (foreign key)
             cur.execute("DELETE FROM chat_messages WHERE doc_id = %s", (doc_id,))
             # Hapus dokumen
             cur.execute("DELETE FROM documents WHERE doc_id = %s", (doc_id,))
