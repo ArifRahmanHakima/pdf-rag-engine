@@ -158,6 +158,21 @@ async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id
         
         num_pages = text.count("=== Page")
         
+        # Extract full_doc_id from newly created chunks in global store
+        full_doc_id = None
+        try:
+            src_chunks = Path(WORKING_DIR) / "kv_store_text_chunks.json"
+            if src_chunks.exists():
+                with open(src_chunks, encoding='utf-8', errors='ignore') as f:
+                    all_chunks = json.load(f)
+                    # Find first chunk with full_doc_id (should be the ones we just inserted)
+                    for chunk_id, chunk_data in all_chunks.items():
+                        if isinstance(chunk_data, dict) and 'full_doc_id' in chunk_data:
+                            full_doc_id = chunk_data['full_doc_id']
+                            break
+        except Exception as e:
+            print(f"[!] Error extracting full_doc_id: {e}")
+        
         # Update session document list
         session_docs_file = session_dir / "documents.json"
         docs = {}
@@ -170,7 +185,8 @@ async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id
             "filename": filename,
             "upload_time": datetime.now().isoformat(),
             "pages": num_pages,
-            "size": len(text)
+            "size": len(text),
+            "full_doc_id": full_doc_id  # Store for later use in delete
         }
         
         with open(session_docs_file, 'w') as f:
@@ -308,10 +324,27 @@ async def get_documents(session_id: str):
             docs = json.load(f)
         
         docs_list = list(docs.values())
+        
+        # Get selected_doc from session_status
+        selected_doc = session_status.get(session_id, {}).get("selected_doc", None)
+        
+        # CRITICAL: Ensure selected_doc points to a valid document
+        # If selected_doc is None or doesn't exist in current docs, use first doc
+        doc_ids = [doc["doc_id"] for doc in docs_list]
+        
+        if selected_doc not in doc_ids:
+            # selected_doc is stale/invalid - switch to first available doc
+            if docs_list:
+                selected_doc = docs_list[0]["doc_id"]
+                session_status[session_id]["selected_doc"] = selected_doc
+                print(f"[!] FIXED stale selected_doc - switched to: {selected_doc}", flush=True)
+            else:
+                selected_doc = None
+        
         return JSONResponse(content={
             "success": True,
             "documents": docs_list,
-            "selected_doc": session_status.get(session_id, {}).get("selected_doc", None)
+            "selected_doc": selected_doc
         })
     except Exception as e:
         return JSONResponse(content={"success": False, "error": str(e)})
@@ -392,42 +425,156 @@ async def get_pdf_fallback(session_id: str):
 
 @app.delete("/api/delete-document/{session_id}/{doc_id}")
 async def delete_document(session_id: str, doc_id: str):
-    """Delete a document and all its associated data"""
+    """Delete a document and ALL its associated data (file, chunks, embeddings, vectors)"""
     try:
         session_dir = SESSIONS_DIR / session_id
         doc_dir = session_dir / "documents" / doc_id
         
-        # Delete document directory (PDF + chunks)
-        if doc_dir.exists():
-            shutil.rmtree(doc_dir)
-            print(f"[✓] Deleted document directory: {doc_dir}")
+        print(f"\n[*] Deleting document: {doc_id} from session {session_id}")
         
-        # Remove from documents.json
+        # ===== 1. DELETE from LightRAG stores (chunks, embeddings, vectors) =====
+        # Load the global chunks file and remove chunks related to this doc
+        try:
+            chunks_file = Path(WORKING_DIR) / "kv_store_text_chunks.json"
+            if chunks_file.exists():
+                with open(chunks_file, 'r', encoding='utf-8', errors='ignore') as f:
+                    chunks_data = json.load(f)
+                
+                # Get doc_id from documents.json to match full_doc_id
+                session_dir = SESSIONS_DIR / session_id
+                doc_metadata_file = session_dir / "documents.json"
+                doc_full_id = None
+                
+                if doc_metadata_file.exists():
+                    with open(doc_metadata_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        docs_meta = json.load(f)
+                        if doc_id in docs_meta:
+                            # Try to get full_doc_id if stored, otherwise will use doc_id
+                            doc_full_id = docs_meta[doc_id].get('full_doc_id', None)
+                
+                # Filter chunks - remove by BOTH markers:
+                # 1. [DOC_ID:xxx] marker in content
+                # 2. full_doc_id field match
+                doc_id_marker = f"[DOC_ID:{doc_id}]"
+                chunks_to_keep = {}
+                deleted_count = 0
+                
+                for chunk_id, chunk_content in chunks_data.items():
+                    should_delete = False
+                    
+                    if isinstance(chunk_content, dict):
+                        # Check marker in content
+                        if 'content' in chunk_content:
+                            content = chunk_content['content']
+                            if doc_id_marker in content:
+                                should_delete = True
+                        
+                        # Check full_doc_id field
+                        chunk_full_id = chunk_content.get('full_doc_id', None)
+                        if chunk_full_id and doc_full_id and chunk_full_id == doc_full_id:
+                            should_delete = True
+                    
+                    if not should_delete:
+                        chunks_to_keep[chunk_id] = chunk_content
+                    else:
+                        deleted_count += 1
+                
+                # Write back filtered chunks
+                with open(chunks_file, 'w', encoding='utf-8') as f:
+                    json.dump(chunks_to_keep, f, ensure_ascii=False, indent=2)
+                
+                print(f"    [✓] Deleted {deleted_count} chunks from global store")
+        except Exception as e:
+            print(f"    [!] Error cleaning chunks store: {e}")
+        
+        # Also clean up VDB files (embeddings + entities) if they exist
+        # These contain references to chunks with doc_id_marker
+        try:
+            vdb_files = [
+                Path(WORKING_DIR) / "vdb_chunks.json",
+                Path(WORKING_DIR) / "vdb_entities.json",
+                Path(WORKING_DIR) / "vdb_relationships.json"
+            ]
+            
+            doc_id_marker = f"[DOC_ID:{doc_id}]"
+            
+            for vdb_file in vdb_files:
+                if not vdb_file.exists():
+                    continue
+                    
+                try:
+                    with open(vdb_file, 'r', encoding='utf-8', errors='ignore') as f:
+                        vdb_data = json.load(f)
+                    
+                    # Filter out entries related to this document
+                    if isinstance(vdb_data, dict):
+                        filtered_data = {}
+                        deleted = 0
+                        
+                        for key, value in vdb_data.items():
+                            # Check if entry contains doc_id_marker
+                            entry_str = json.dumps(value)
+                            if doc_id_marker not in entry_str:
+                                filtered_data[key] = value
+                            else:
+                                deleted += 1
+                        
+                        if deleted > 0:
+                            with open(vdb_file, 'w', encoding='utf-8') as f:
+                                json.dump(filtered_data, f, ensure_ascii=False, indent=2)
+                            print(f"    [✓] Cleaned {vdb_file.name} (removed {deleted} entries)")
+                except Exception as e:
+                    print(f"    [!] Error cleaning {vdb_file.name}: {e}")
+        except Exception as e:
+            print(f"    [!] Error in VDB cleanup: {e}")
+        
+        # ===== 2. DELETE document directory (PDF + local chunks copy) =====
+        if doc_dir.exists():
+            shutil.rmtree(doc_dir, ignore_errors=True)
+            print(f"    [✓] Deleted document directory")
+        
+        # ===== 3. UPDATE documents.json =====
         docs_file = session_dir / "documents.json"
+        docs = {}  # Initialize empty dict
         if docs_file.exists():
-            with open(docs_file) as f:
+            with open(docs_file, 'r', encoding='utf-8', errors='ignore') as f:
                 docs = json.load(f)
             
             if doc_id in docs:
                 del docs[doc_id]
-                with open(docs_file, 'w') as f:
-                    json.dump(docs, f, indent=2)
+                # Write back updated docs
+                with open(docs_file, 'w', encoding='utf-8') as f:
+                    json.dump(docs, f, ensure_ascii=False, indent=2)
+                print(f"    [✓] Removed from documents.json")
         
-        # Remove chat history for this document from localStorage (frontend will handle this)
-        # Update selected_doc if it was the deleted one
+        # ===== 4. UPDATE session status =====
         if session_id in session_status:
             if session_status[session_id].get("selected_doc") == doc_id:
                 # Find another document to select
-                if docs:
-                    session_status[session_id]["selected_doc"] = next(iter(docs.keys()))
+                remaining_docs = list(docs.keys())
+                if remaining_docs:
+                    session_status[session_id]["selected_doc"] = remaining_docs[0]
                 else:
                     session_status[session_id]["selected_doc"] = None
         
-        print(f"[✓] Deleted document: {doc_id}")
-        return JSONResponse(content={"success": True, "message": "Document deleted"})
+        # ===== 5. CHECK if session is EMPTY - if so, DELETE entire session folder =====
+        if len(docs) == 0:
+            # No documents left in this session - delete the entire session
+            if session_dir.exists():
+                shutil.rmtree(session_dir, ignore_errors=True)
+                print(f"    [✓] Session folder deleted (no documents remaining)")
+            
+            # Remove from session_status
+            if session_id in session_status:
+                del session_status[session_id]
+        
+        print(f"[✓] Fully deleted document: {doc_id} (file + chunks + embeddings)\n")
+        return JSONResponse(content={"success": True, "message": "Document and all data deleted successfully"})
     
     except Exception as e:
         print(f"[!] Delete error: {e}")
+        import traceback
+        traceback.print_exc()
         return JSONResponse(content={"success": False, "error": str(e)})
 
 def cleanup_llm_response(text: str) -> str:
@@ -546,10 +693,10 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         combined = combined.strip()
         
         # Limit context length - INCREASED for better coverage
-        # For section/table queries: up to 20000 chars
+        # For section/table queries: up to 25000 chars (full section content)
         # For general queries: 8000 chars (enough for summary, not overwhelming)
         if any(w in query.lower() for w in ['menimbang', 'mengingat', 'menetapkan', 'tabel', 'daftar']):
-            max_context_len = 20000  # More for section/table queries - increased to capture all points
+            max_context_len = 25000  # More for section/table queries - FULL content
         else:
             max_context_len = 8000  # Reduced for general queries to avoid garbage
         

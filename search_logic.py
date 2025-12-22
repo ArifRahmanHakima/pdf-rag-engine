@@ -32,12 +32,15 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                 if isinstance(item, dict) and 'content' in item:
                     content = item['content']
                     
-                    # Load ALL chunks from the document
-                    # (Marker might not be on all chunks if LightRAG split them)
-                    chunks.append(content)
+                    # CRITICAL: Filter chunks by DOC_ID marker
+                    # Only include chunks that belong to the requested document
+                    if doc_id_marker in content:
+                        # Remove the marker for cleaner processing
+                        content = content.replace(doc_id_marker, '').strip()
+                        chunks.append(content)
         
         if not chunks:
-            print(f"[!] No chunks found for doc={doc_id}", flush=True)
+            print(f"[!] No chunks found for doc={doc_id} (or all chunks have different DOC_ID)", flush=True)
             return []
         
         print(f"[*] Searching {len(chunks)} chunks from doc {doc_id}: '{query[:60]}'", flush=True)
@@ -46,10 +49,11 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         
         # ========== DETECT QUERY TYPE ==========
         section_keywords = ['menimbang', 'mengingat', 'menetapkan', 'mempertimbangkan', 'konsiderasi', 'dasar', 'pertimbangan']
-        table_keywords = ['tabel', 'daftar', 'table', 'nama', 'list', 'siapa', 'data', 'kategori', 'kelompok']
+        table_keywords = ['tabel', 'daftar', 'table', 'kategori', 'kelompok']  # Core table keywords only
         
         requested_section = None
         is_table_query = False
+        table_keywords_in_query = []
         
         for sec in section_keywords:
             if sec in query_lower:
@@ -58,11 +62,12 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         
         if any(kw in query_lower for kw in table_keywords):
             is_table_query = True
+            table_keywords_in_query = [kw for kw in table_keywords if kw in query_lower]
         
         if requested_section:
             print(f"[*] TYPE: SECTION QUERY ('{requested_section}')", flush=True)
         elif is_table_query:
-            print(f"[*] TYPE: TABLE QUERY", flush=True)
+            print(f"[*] TYPE: TABLE QUERY (keywords: {table_keywords_in_query})", flush=True)
         else:
             print(f"[*] TYPE: GENERAL QUERY", flush=True)
         
@@ -143,21 +148,62 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             
             # ===== TABLE DETECTION - HIGH PRIORITY =====
             if is_table_query:
-                # Pattern 1: Box drawing characters
+                # GENERIC: Detect if chunk contains table structure markers
                 table_chars = ['│', '|', '─', '├', '┤', '┬', '┴', '┼', '┌', '┐', '└', '┘', '║', '╔', '╗', '╚', '╝', '═']
-                if any(ch in chunk for ch in table_chars):
-                    score += 300.0  # Strong boost for table markers
-                    print(f"[*] Chunk {chunk_idx}: TABLE MARKER found", flush=True)
+                has_table_markers = any(ch in chunk for ch in table_chars)
                 
-                # Pattern 2: Column alignment (multiple spaces between words)
+                # Count number of pipe-delimited lines (universal for tables)
                 lines = chunk.split('\n')
-                aligned_lines = sum(1 for line in lines if re.search(r'\w+\s{2,}\w+\s{2,}', line))
-                if aligned_lines >= 2:
-                    score += 200.0  # Columnar table
-                    print(f"[*] Chunk {chunk_idx}: COLUMNAR table ({aligned_lines} aligned lines)", flush=True)
+                pipe_lines = sum(1 for line in lines if line.count('|') >= 2)  # At least 2 pipes = table row
+                has_many_pipes = pipe_lines >= 2
                 
-                # Pattern 3: Common table headers
-                table_headers = ['no\.|no\.|nomor', 'nama\s', 'kategori', 'kelompok', 'jumlah', 'peringkat', 'kolom', 'baris']
+                # Count alignment patterns (spaces between tokens)
+                aligned_lines = sum(1 for line in lines if re.search(r'\w+\s{2,}\w+\s{2,}', line))
+                has_aligned_cols = aligned_lines >= 2
+                
+                # Check for structured data: lots of numbers and separators
+                num_count = len(re.findall(r'\d+', chunk))
+                punct_count = chunk.count('|') + chunk.count('-') + chunk.count('+')
+                has_structure = (num_count > 3 and punct_count > 5)
+                
+                # Score generically: if it HAS any table structure, it's likely table content
+                if has_table_markers or has_many_pipes:
+                    score += 350.0  # Strong signal for table
+                elif has_aligned_cols or has_structure:
+                    score += 200.0  # Medium signal
+                
+                # CRITICAL: Penalize chunks that are BETWEEN table chunks
+                # If prev and next chunks have tables but this doesn't, boost this chunk too
+                # (it's likely table data that got split across chunks)
+                if chunk_idx > 0 and chunk_idx < len(chunks) - 1:
+                    prev_chunk_lower = chunks[chunk_idx - 1].lower()
+                    next_chunk_lower = chunks[chunk_idx + 1].lower()
+                    
+                    prev_has_table = any(ch in chunks[chunk_idx - 1] for ch in table_chars)
+                    next_has_table = any(ch in chunks[chunk_idx + 1] for ch in table_chars)
+                    
+                    # If sandwiched between tables, boost this chunk too (it's part of the table!)
+                    if prev_has_table and next_has_table:
+                        score += 200.0  # Boost chunks between table chunks
+                        print(f"[*] Chunk {chunk_idx}: SANDWICHED BETWEEN TABLES - boosting", flush=True)
+                
+                # CRITICAL: Penalize chunks that are BETWEEN table chunks
+                # If prev and next chunks have tables but this doesn't, boost this chunk too
+                # (it's likely table data that got split across chunks)
+                if chunk_idx > 0 and chunk_idx < len(chunks) - 1:
+                    prev_chunk_lower = chunks[chunk_idx - 1].lower()
+                    next_chunk_lower = chunks[chunk_idx + 1].lower()
+                    
+                    prev_has_table = any(ch in chunks[chunk_idx - 1] for ch in table_chars)
+                    next_has_table = any(ch in chunks[chunk_idx + 1] for ch in table_chars)
+                    
+                    # If sandwiched between tables, boost this chunk too (it's part of the table!)
+                    if prev_has_table and next_has_table:
+                        score += 200.0  # Boost chunks between table chunks
+                        print(f"[*] Chunk {chunk_idx}: SANDWICHED BETWEEN TABLES - boosting", flush=True)
+                
+                # Pattern 2: Common table headers (flexible untuk berbagai format tabel)
+                table_headers = ['no\\.', 'no\\s', 'nomor', 'nama', 'kategori', 'kelompok', 'jumlah', 'peringkat', 'kolom', 'baris', 'asal', 'wilayah', 'sekolah']
                 header_matches = sum(1 for hdr in table_headers if re.search(hdr, chunk_lower))
                 score += header_matches * 80.0  # Per header match
                 
@@ -166,6 +212,11 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                 punct_count = chunk.count('|') + chunk.count('-')
                 if num_count > 5 and punct_count > 5:
                     score += 150.0
+                
+                # Pattern 5: Match query keywords in table content
+                for table_kw in table_keywords_in_query:
+                    if table_kw in chunk_lower:
+                        score += 100.0  # Boost chunks mentioning specific table keywords
             
             # ===== POINT MATCHING =====
             point_patterns = [
@@ -235,11 +286,44 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                 best_chunks = [chunks[i] for i in top_indices]
             
         elif is_table_query:
-            # For table queries: return chunks with table indicators
-            top_k = 999
-            threshold = -100
+            # For table queries: get table chunks but PRESERVE CONTINUITY
+            # Don't randomly jump between chunks - keep consecutive chunks together
+            top_k = 20
+            threshold = 0.0  # More lenient
+            
             top_indices = np.argsort(-scores_array)[:top_k]
-            best_chunks = [chunks[i] for i in top_indices if scores_array[i] >= threshold]
+            candidate_indices = [i for i in top_indices if scores_array[i] >= threshold]
+            
+            # Sort indices to preserve order (tables should be consecutive)
+            candidate_indices = sorted(candidate_indices)
+            
+            # Group consecutive indices together (table should be in 1-3 consecutive chunks)
+            if candidate_indices:
+                # Find the longest consecutive sequence
+                best_sequence = [candidate_indices[0]]
+                current_sequence = [candidate_indices[0]]
+                
+                for idx in candidate_indices[1:]:
+                    if idx - current_sequence[-1] <= 2:  # Allow max 2-chunk gap
+                        current_sequence.append(idx)
+                    else:
+                        # Reset sequence if gap too large
+                        if len(current_sequence) > len(best_sequence):
+                            best_sequence = current_sequence
+                        current_sequence = [idx]
+                
+                # Use best sequence found
+                if len(current_sequence) > len(best_sequence):
+                    best_sequence = current_sequence
+                
+                best_chunks = [chunks[i] for i in best_sequence]
+            else:
+                best_chunks = []
+            
+            # Fallback: if no chunks found, take any top chunks
+            if not best_chunks:
+                top_indices = np.argsort(-scores_array)[:10]
+                best_chunks = [chunks[i] for i in top_indices]
         else:
             # For general queries: take top relevant chunks only
             # For large documents: be more selective
@@ -258,6 +342,13 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             # If too few chunks found, relax threshold but keep top_k limit
             if len(best_chunks) < 5 and top_k > 10:
                 best_chunks = [chunks[i] for i in top_indices[:min(10, len(chunks))]]
+        
+        # ===== SPECIAL HANDLING FOR SECTION QUERIES =====
+        if requested_section and section_chunk_indices:
+            # For section queries: return ALL chunks from the section (in order)
+            section_indices_sorted = sorted(section_chunk_indices)
+            best_chunks = [chunks[i] for i in section_indices_sorted]
+            print(f"[✓] SECTION QUERY: Returning ALL {len(best_chunks)} chunks from section '{requested_section}'", flush=True)
         
         if not best_chunks:
             # Fallback: take top chunks anyway

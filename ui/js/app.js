@@ -8,6 +8,21 @@ let currentDocId = null;  // Track selected document
 let isLoading = false;
 let documents = [];  // List of documents in current session
 
+// ===== Storage Helpers =====
+function saveCurrentSelection(sessionId, docId) {
+    localStorage.setItem('lastSession', sessionId);
+    localStorage.setItem(`lastDoc_${sessionId}`, docId);
+    console.log(`[STORAGE] Saved: session=${sessionId}, doc=${docId}`);
+}
+
+function getLastSelection() {
+    const lastSession = localStorage.getItem('lastSession');
+    return lastSession ? {
+        sessionId: lastSession,
+        docId: localStorage.getItem(`lastDoc_${lastSession}`)
+    } : null;
+}
+
 // ===== DOM Elements =====
 let uploadBtn, fileInputModal, uploadModal, uploadArea, uploadProgress, uploadStatus, modalClose;
 let sessionsList, currentPdfName, deleteBtn, pdfViewer;
@@ -106,6 +121,53 @@ async function handleFileSelect(file) {
     uploadArea.style.display = 'none';
     uploadProgress.style.display = 'block';
     
+    // Extract PDF metadata
+    const fileSize = file.size;
+    const fileName = file.name;
+    let pageCount = '?';
+    let pdfType = 'Unknown';
+    
+    try {
+        // Use PDF.js to get page count
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        pageCount = pdf.numPages;
+        
+        // Estimate PDF type (scanned vs digital)
+        // Try to detect text to determine if scanned or digital
+        let hasText = false;
+        try {
+            const page = await pdf.getPage(1);
+            const textContent = await page.getTextContent();
+            hasText = textContent.items.length > 0;
+        } catch (e) {
+            hasText = false;
+        }
+        
+        pdfType = hasText ? '📋 Digital PDF' : '📸 Scanned PDF';
+        
+    } catch (error) {
+        console.error('Error reading PDF:', error);
+        pageCount = '?';
+        pdfType = 'PDF (unknown type)';
+    }
+    
+    // Calculate estimate time (rough: ~2-3 sec per page for OCR)
+    const estimatedSeconds = pageCount !== '?' ? Math.ceil(pageCount * 2.5) : 30;
+    const estimatedTime = estimatedSeconds < 60 
+        ? `~${estimatedSeconds} detik` 
+        : `~${Math.ceil(estimatedSeconds / 60)} menit`;
+    
+    // Update upload info display
+    const uploadInfo = document.getElementById('uploadInfo');
+    if (uploadInfo) {
+        document.getElementById('infoFileName').textContent = fileName;
+        document.getElementById('infoPages').textContent = `${pageCount} halaman`;
+        document.getElementById('infoPdfType').textContent = pdfType;
+        document.getElementById('infoEstimate').textContent = estimatedTime;
+        uploadInfo.style.display = 'block';
+    }
+    
     // Animate progress bar
     const progressFill = document.querySelector('.progress-fill');
     let progress = 0;
@@ -130,6 +192,12 @@ async function handleFileSelect(file) {
 
         if (data.success) {
             const sessionId = data.session_id;
+            const docId = data.doc_id;
+            
+            // Clear old chat history for this doc (if it was deleted before)
+            const chatKey = `chat_${sessionId}_${docId}`;
+            localStorage.removeItem(chatKey);
+            console.log(`[handleFileSelect] Cleared old chat history: ${chatKey}`);
             
             uploadStatus.textContent = 'Processing PDF...';
 
@@ -271,7 +339,15 @@ async function loadSessions() {
 }
 
 async function selectSession(sessionId, initialSummary = null) {
+    console.log(`[selectSession] Switching to session: ${sessionId} (from ${currentSessionId})`);
+    
+    // CRITICAL: Clear old doc selection when switching session
+    // This prevents using doc from previous session
     currentSessionId = sessionId;
+    currentDocId = null;
+    
+    // Clear chat history when switching session
+    chatMessages.innerHTML = '';
     
     // Update active state
     document.querySelectorAll('.session-item').forEach(item => {
@@ -292,7 +368,7 @@ async function selectSession(sessionId, initialSummary = null) {
             if (session) {
                 currentPdfName.textContent = session.filename;
                 
-                // Load documents FIRST to set currentDocId properly
+                // Load documents FIRST to set currentDocId properly for NEW session
                 await loadDocuments(sessionId);
                 console.log(`[selectSession] After loadDocuments, currentDocId: ${currentDocId}, documents: ${documents.length}`);
                 
@@ -318,28 +394,31 @@ async function selectSession(sessionId, initialSummary = null) {
 function loadChatHistory(sessionId, docId) {
     /**
      * Restore chat history from localStorage - PER DOCUMENT
+     * This REPLACES current chat with history for specific document
      */
     const key = `chat_${sessionId}_${docId}`;
     const history = localStorage.getItem(key);
     
-    console.log(`[loadChatHistory] Loading chat for session: ${sessionId}, doc: ${docId}`);
+    console.log(`[loadChatHistory] Loading chat for session: ${sessionId}, doc: ${docId}, key: ${key}`);
+    
+    // ALWAYS clear current chat when switching doc
+    chatMessages.innerHTML = '';
     
     if (history) {
         try {
             const messages = JSON.parse(history);
-            chatMessages.innerHTML = '';
             messages.forEach(msg => {
                 addMessage(msg.text, msg.role, false); // Don't save again
             });
             chatMessages.scrollTop = chatMessages.scrollHeight;
-            console.log(`[loadChatHistory] Loaded ${messages.length} messages`);
+            console.log(`[loadChatHistory] Loaded ${messages.length} messages for doc ${docId}`);
         } catch (e) {
             console.error('Failed to restore chat history:', e);
             chatMessages.innerHTML = '<div class="empty-state"><p>Select a PDF and start asking questions</p></div>';
         }
     } else {
         chatMessages.innerHTML = '<div class="empty-state"><p>Select a PDF and start asking questions</p></div>';
-        console.log(`[loadChatHistory] No chat history found`);
+        console.log(`[loadChatHistory] No chat history found for doc ${docId}`);
     }
 }
 
@@ -374,9 +453,9 @@ async function loadDocuments(sessionId) {
         }
         
         documents = data.documents;
-        const selectedDoc = data.selected_doc;
+        let selectedDoc = data.selected_doc;  // From backend (already validated)
         
-        console.log(`[loadDocuments] Found ${documents.length} docs, selected: ${selectedDoc}`);
+        console.log(`[loadDocuments] Found ${documents.length} docs, backend selected: ${selectedDoc}`);
         
         // Show documents list in left sidebar
         const documentsList = document.getElementById('documentsList');
@@ -396,16 +475,17 @@ async function loadDocuments(sessionId) {
                 docItem.className = 'doc-item';
                 
                 // Determine if this should be active
-                const isSelected = doc.doc_id === selectedDoc || (selectedDoc === null && documents[0].doc_id === doc.doc_id);
+                // Priority: backend selected > localStorage > first doc
+                const isSelected = doc.doc_id === selectedDoc;
                 if (isSelected) {
                     docItem.classList.add('active');
                     currentDocId = doc.doc_id;
+                    saveCurrentSelection(sessionId, doc.doc_id);  // Save to localStorage
                 }
                 
                 docItem.innerHTML = `
                     <div class="doc-name">${doc.filename}</div>
                     <div class="doc-meta">${doc.pages} pages</div>
-                    <button class="btn-delete-doc" title="Delete document" onclick="event.stopPropagation(); deleteDocument('${currentSessionId}', '${doc.doc_id}')">🗑️</button>
                 `;
                 
                 docItem.addEventListener('click', () => {
@@ -424,7 +504,8 @@ async function loadDocuments(sessionId) {
             // Final sanity check: if currentDocId is still not set, use first doc
             if (!currentDocId && documents.length > 0) {
                 currentDocId = documents[0].doc_id;
-                console.log(`[loadDocuments] currentDocId not set, using first: ${currentDocId}`);
+                saveCurrentSelection(sessionId, currentDocId);  // Save to localStorage
+                console.log(`[loadDocuments] Set currentDocId to first doc: ${currentDocId}`);
             }
             console.log(`[loadDocuments] Final currentDocId: ${currentDocId}`);
         } else {
@@ -443,18 +524,26 @@ async function selectDocument(docId) {
     /**
      * Switch to a different document and reload PDF
      */
-    console.log(`[selectDocument] Switching to doc: ${docId}`);
+    console.log(`[selectDocument] Switching from doc: ${currentDocId} to doc: ${docId}`);
+    
+    // FIRST: Save chat history for PREVIOUS document (use old docId!)
+    if (currentSessionId && currentDocId && currentDocId !== docId) {
+        console.log(`[selectDocument] Saving chat for previous doc: ${currentDocId}`);
+        saveChatHistory(currentSessionId, currentDocId);
+    }
+    
+    // THEN: Update to new document
     currentDocId = docId;
     
-    // Save chat for previous document (if any)
-    if (currentSessionId && currentDocId) {
-        saveChatHistory(currentSessionId, currentDocId);
+    // Save selection to localStorage
+    if (currentSessionId) {
+        saveCurrentSelection(currentSessionId, docId);
     }
     
     // Clear old PDF first
     pdfViewer.innerHTML = '<div class="empty-state"><p>Loading PDF...</p></div>';
     
-    // Update server about document selection and wait for completion
+    // Update server about document selection
     try {
         const response = await fetch(`/api/select-document/${currentSessionId}?doc_id=${docId}`, {
             method: 'POST'
@@ -471,7 +560,7 @@ async function selectDocument(docId) {
     // Load chat history for THIS specific document
     loadChatHistory(currentSessionId, docId);
     
-    // THEN reload PDF with new document (now currentDocId is properly set)
+    // THEN reload PDF with new document (now currentDocId is properly set to new doc)
     await loadPdfContent(currentSessionId);
     
     console.log(`📄 Switched to document: ${docId}`);
@@ -607,19 +696,26 @@ function escapeHtml(text) {
 }
 
 async function deleteCurrentSession() {
-    if (!currentSessionId) return;
+    if (!currentSessionId || !currentDocId) return;
 
-    if (!confirm('Are you sure you want to delete this PDF?')) return;
+    if (!confirm('Are you sure you want to delete this PDF and all related data?')) return;
 
     try {
-        const response = await fetch(`/api/sessions/${currentSessionId}`, {
+        // Delete from backend (chunks, embeddings, file)
+        const response = await fetch(`/api/delete-document/${currentSessionId}/${currentDocId}`, {
             method: 'DELETE'
         });
 
         const data = await response.json();
 
         if (data.success) {
-            currentSessionId = null;
+            // Clear local chat history for this document
+            const chatKey = `chat_${currentSessionId}_${currentDocId}`;
+            localStorage.removeItem(chatKey);
+            console.log(`[deleteDocument] Cleared chat history: ${chatKey}`);
+
+            // Reset current document
+            currentDocId = null;
             currentPdfName.textContent = 'Select a PDF';
             chatMessages.innerHTML = '<div class="empty-state"><p>Select a PDF to chat</p></div>';
             pdfViewer.innerHTML = '<div class="empty-state"><div style="font-size: 48px; margin-bottom: 10px;">📄</div><h3>No PDF selected</h3></div>';
@@ -627,11 +723,22 @@ async function deleteCurrentSession() {
             sendBtn.disabled = true;
             deleteBtn.style.display = 'none';
 
-            loadSessions();
+            // Reload documents and sessions
+            await loadDocuments(currentSessionId);
+            
+            // If no documents left in session, reload sessions
+            if (documents.length === 0) {
+                loadSessions();
+            } else {
+                // Select first available document
+                selectDocument(documents[0].doc_id);
+            }
+        } else {
+            alert('Failed to delete: ' + (data.error || 'Unknown error'));
         }
     } catch (error) {
         console.error('Delete error:', error);
-        alert('Failed to delete session');
+        alert('Failed to delete document');
     }
 }
 
