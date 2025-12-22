@@ -14,19 +14,25 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
     import asyncio
     
     t0 = time.time()
+    print(f"\n[SEARCH] Query: '{query[:60]}' | Session: {session_id} | Doc: {doc_id}", flush=True)
+    
     try:
         # Load chunks from selected document only
         session_dir = Path(SESSIONS_DIR) / session_id
         doc_chunks_path = session_dir / "documents" / doc_id / "chunks.json"
         
+        print(f"[SEARCH] Looking for chunks at: {doc_chunks_path}", flush=True)
+        
         if not doc_chunks_path.exists():
-            print(f"[!] Chunks not found for doc={doc_id}", flush=True)
+            print(f"[!] Chunks not found for doc={doc_id} (path: {doc_chunks_path})", flush=True)
             return []
         
         with open(doc_chunks_path, encoding='utf-8', errors='ignore') as f:
             data = json.load(f)
             chunks = []
             doc_id_marker = f"[DOC_ID:{doc_id}]"
+            
+            print(f"[SEARCH] Total chunks in file: {len(data)}, looking for marker: {doc_id_marker}", flush=True)
             
             for chunk_id, item in data.items():
                 if isinstance(item, dict) and 'content' in item:
@@ -55,9 +61,27 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         is_table_query = False
         table_keywords_in_query = []
         
+        # Check for section keywords with fuzzy matching (handle suffixes like -kan, -i, -an)
         for sec in section_keywords:
+            # Try exact match first
             if sec in query_lower:
                 requested_section = sec
+                print(f"[SEARCH] Detected section: '{sec}' (exact match)", flush=True)
+                break
+            # Try with -kan suffix
+            elif sec + 'kan' in query_lower:
+                requested_section = sec
+                print(f"[SEARCH] Detected section: '{sec}' (suffix -kan match)", flush=True)
+                break
+            # Try with -an suffix
+            elif sec + 'an' in query_lower:
+                requested_section = sec
+                print(f"[SEARCH] Detected section: '{sec}' (suffix -an match)", flush=True)
+                break
+            # Try with -i suffix
+            elif sec + 'i' in query_lower:
+                requested_section = sec
+                print(f"[SEARCH] Detected section: '{sec}' (suffix -i match)", flush=True)
                 break
         
         if any(kw in query_lower for kw in table_keywords):
@@ -146,7 +170,7 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                                 score -= 200.0  # Extra penalty
                                 break
             
-            # ===== TABLE DETECTION - HIGH PRIORITY =====
+            # ===== TABLE DETECTION - HIGHEST PRIORITY (if is_table_query) =====
             if is_table_query:
                 # GENERIC: Detect if chunk contains table structure markers
                 table_chars = ['│', '|', '─', '├', '┤', '┬', '┴', '┼', '┌', '┐', '└', '┘', '║', '╔', '╗', '╚', '╝', '═']
@@ -166,57 +190,36 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
                 punct_count = chunk.count('|') + chunk.count('-') + chunk.count('+')
                 has_structure = (num_count > 3 and punct_count > 5)
                 
-                # Score generically: if it HAS any table structure, it's likely table content
+                # STRONG BOOST for table chunks (HIGHEST PRIORITY when searching for tables)
                 if has_table_markers or has_many_pipes:
-                    score += 350.0  # Strong signal for table
+                    score += 1000.0  # VERY STRONG signal - pipes are definitive table marker
+                    print(f"[*] Chunk {chunk_idx}: STRONG TABLE MARKER (pipes/box chars) - score += 1000", flush=True)
                 elif has_aligned_cols or has_structure:
-                    score += 200.0  # Medium signal
+                    score += 500.0  # MEDIUM-HIGH signal
+                    print(f"[*] Chunk {chunk_idx}: MEDIUM TABLE SIGNAL (aligned cols/structure) - score += 500", flush=True)
                 
-                # CRITICAL: Penalize chunks that are BETWEEN table chunks
-                # If prev and next chunks have tables but this doesn't, boost this chunk too
-                # (it's likely table data that got split across chunks)
+                # Boost chunks sandwiched between table chunks (definitely part of table!)
                 if chunk_idx > 0 and chunk_idx < len(chunks) - 1:
-                    prev_chunk_lower = chunks[chunk_idx - 1].lower()
-                    next_chunk_lower = chunks[chunk_idx + 1].lower()
-                    
                     prev_has_table = any(ch in chunks[chunk_idx - 1] for ch in table_chars)
                     next_has_table = any(ch in chunks[chunk_idx + 1] for ch in table_chars)
                     
-                    # If sandwiched between tables, boost this chunk too (it's part of the table!)
                     if prev_has_table and next_has_table:
-                        score += 200.0  # Boost chunks between table chunks
-                        print(f"[*] Chunk {chunk_idx}: SANDWICHED BETWEEN TABLES - boosting", flush=True)
+                        score += 400.0  # HIGH boost - this IS table data
+                        print(f"[*] Chunk {chunk_idx}: SANDWICHED BETWEEN TABLES - score += 400", flush=True)
                 
-                # CRITICAL: Penalize chunks that are BETWEEN table chunks
-                # If prev and next chunks have tables but this doesn't, boost this chunk too
-                # (it's likely table data that got split across chunks)
-                if chunk_idx > 0 and chunk_idx < len(chunks) - 1:
-                    prev_chunk_lower = chunks[chunk_idx - 1].lower()
-                    next_chunk_lower = chunks[chunk_idx + 1].lower()
-                    
-                    prev_has_table = any(ch in chunks[chunk_idx - 1] for ch in table_chars)
-                    next_has_table = any(ch in chunks[chunk_idx + 1] for ch in table_chars)
-                    
-                    # If sandwiched between tables, boost this chunk too (it's part of the table!)
-                    if prev_has_table and next_has_table:
-                        score += 200.0  # Boost chunks between table chunks
-                        print(f"[*] Chunk {chunk_idx}: SANDWICHED BETWEEN TABLES - boosting", flush=True)
-                
-                # Pattern 2: Common table headers (flexible untuk berbagai format tabel)
-                table_headers = ['no\\.', 'no\\s', 'nomor', 'nama', 'kategori', 'kelompok', 'jumlah', 'peringkat', 'kolom', 'baris', 'asal', 'wilayah', 'sekolah']
+                # Common table headers - flexible regex patterns
+                table_headers = [r'no[\s\.]', r'nomor', r'nama', r'kategori', r'kelompok', r'jumlah', r'peringkat', r'kolom', r'baris', r'asal', r'wilayah', r'sekolah']
                 header_matches = sum(1 for hdr in table_headers if re.search(hdr, chunk_lower))
-                score += header_matches * 80.0  # Per header match
+                score += header_matches * 150.0  # BOOSTED - header is strong indicator
                 
-                # Pattern 4: Structured data (lots of numbers, punctuation)
-                num_count = len(re.findall(r'\d', chunk))
-                punct_count = chunk.count('|') + chunk.count('-')
+                # Structured data with multiple rows (lots of numbers and columns)
                 if num_count > 5 and punct_count > 5:
-                    score += 150.0
+                    score += 300.0  # STRONG boost
                 
-                # Pattern 5: Match query keywords in table content
+                # Match query keywords in table content (user asking about specific table)
                 for table_kw in table_keywords_in_query:
                     if table_kw in chunk_lower:
-                        score += 100.0  # Boost chunks mentioning specific table keywords
+                        score += 200.0  # BOOSTED - table keyword match is strong
             
             # ===== POINT MATCHING =====
             point_patterns = [

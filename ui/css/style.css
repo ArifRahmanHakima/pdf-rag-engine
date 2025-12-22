@@ -280,7 +280,7 @@ body {
 
 /* ===== RIGHT SIDEBAR: Chat ===== */
 .sidebar-right {
-    width: 380px;
+    width: 500px;
     background: white;
     border-left: 1px solid #e0e0e0;
     display: flex;
@@ -405,7 +405,7 @@ body {
 
 .chat-message.user-message {
     align-items: flex-end;
-    margin-left: 40px;
+    margin-left: 20px;
 }
 
 .chat-message.user-message .message-content {
@@ -413,17 +413,18 @@ body {
     color: white;
     padding: 12px 16px;
     border-radius: 18px 18px 4px 18px;
-    max-width: 100%;
+    max-width: 85%;
+    min-width: 60px;
     word-wrap: break-word;
     word-break: break-word;
     box-shadow: 0 2px 8px rgba(16, 163, 127, 0.2);
     font-size: 14px;
-    line-height: 1.4;
+    line-height: 1.5;
 }
 
 .chat-message.assistant-message {
     align-items: flex-start;
-    margin-right: 40px;
+    margin-right: 20px;
 }
 
 .chat-message.assistant-message .message-content {
@@ -432,7 +433,8 @@ body {
     padding: 12px 16px;
     border-radius: 18px 18px 18px 4px;
     border: 1px solid #e0e0e0;
-    max-width: 100%;
+    max-width: 85%;
+    min-width: 80px;
     word-wrap: break-word;
     word-break: break-word;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
@@ -462,8 +464,143 @@ body {
     margin-bottom: 4px;
 }
 
+/* ===== TABLE STYLING ===== */
+.message-content table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 14px 0;
+    background: white;
+    border-radius: 6px;
+    overflow: hidden;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+    font-size: 12px;
+    table-layout: auto;
+    min-width: auto;
+}
+
+/* Table Header Styling */
+.message-content table thead {
+    background: linear-gradient(135deg, #10a37f 0%, #0d8b6f 100%);
+    color: white;
+    position: sticky;
+    top: 0;
+}
+
+.message-content table th {
+    padding: 6px 8px;
+    text-align: left;
+    font-weight: 600;
+    border-right: 1px solid rgba(255,255,255,0.15);
+    font-size: 11px;
+    letter-spacing: 0.2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.message-content table th:last-child {
+    border-right: none;
+}
+
+/* Table Body Styling */
+.message-content table tbody {
+    background: white;
+}
+
+.message-content table td {
+    padding: 5px 8px;
+    border-right: 1px solid #e8e8e8;
+    border-bottom: 1px solid #f0f0f0;
+    font-size: 11px;
+    color: #333;
+    line-height: 1.3;
+    vertical-align: middle;
+    max-width: 80px;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+.message-content table td:last-child {
+    border-right: none;
+}
+
+/* Table Row Hover Effect */
+.message-content table tbody tr {
+    transition: background-color 0.15s ease;
+}
+
+.message-content table tbody tr:hover {
+    background: #f8fafb;
+}
+
+.message-content table tbody tr:hover td {
+    background: #f8fafb;
+}
+
+.message-content table tbody tr:last-child td {
+    border-bottom: none;
+}
+
+/* Striped rows for better readability */
+.message-content table tbody tr:nth-child(odd) {
+    background: #fafbfc;
+}
+
+.message-content table tbody tr:nth-child(odd):hover {
+    background: #f3f5f7;
+}
+
+/* Allow horizontal scroll for tables that overflow */
+.message-content {
+    overflow-x: auto;
+}
+
+/* Responsive table for smaller screens */
+@media (max-width: 600px) {
+    .message-content table {
+        font-size: 11px;
+        min-width: 400px;
+    }
+    
+    .message-content table th,
+    .message-content table td {
+        padding: 8px 10px;
+        font-size: 11px;
+    }
+}
+
+/* Markdown table (pipe format) */
 .message-content {
     word-wrap: break-word;
+    overflow-x: auto;
+    overflow-y: visible;
+}
+
+/* Ensure tables don't overflow container */
+.message-content > table {
+    margin-left: auto;
+    margin-right: auto;
+}
+
+/* Preformatted text and code blocks for table display */
+.message-content pre {
+    background: #f5f5f5;
+    padding: 12px;
+    border-radius: 6px;
+    overflow-x: auto;
+    margin: 8px 0;
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    border-left: 3px solid #10a37f;
+}
+
+.message-content code {
+    font-family: 'Courier New', monospace;
+    font-size: 12px;
+    background: #f5f5f5;
+    padding: 2px 6px;
+    border-radius: 3px;
 }
 
 .message-time {

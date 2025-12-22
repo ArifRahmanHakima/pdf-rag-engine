@@ -3,7 +3,7 @@ FastAPI Server - EXACT SAME LOGIC AS main_openrouter.py
 Copy-paste flow: Create RAG → Initialize → Ingest → Query
 """
 
-import os, json, time, asyncio, shutil, io, sys
+import os, json, time, asyncio, shutil, io, sys, re
 from pathlib import Path
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -106,6 +106,61 @@ def save_session_metadata(session_id: str, metadata: dict):
     with open(session_dir / "metadata.json", 'w') as f:
         json.dump(metadata, f, indent=2)
 
+def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
+    """
+    Split text into overlapping chunks for better RAG processing
+    CRITICAL: Keep tables intact - don't split tables across chunks
+    OPTIMIZED: Fast-path for small texts, simple split logic
+    """
+    # Fast path: if text is small, don't chunk
+    if len(text) < chunk_size:
+        return [text]
+    
+    # Try simple split by section headers first (fastest)
+    import re
+    sections = re.split(r'(?:^|\n)(MENIMBANG|MENGINGAT|MENETAPKAN|MEMUTUSKAN|DAFTAR|LAMPIRAN|BAB)', text, flags=re.IGNORECASE | re.MULTILINE, maxsplit=10)
+    
+    if len(sections) > 3:  # Found sections
+        chunks = []
+        for i in range(1, len(sections), 2):
+            header = sections[i]
+            content = sections[i+1] if i+1 < len(sections) else ""
+            chunk = (header + content).strip()
+            if chunk and len(chunk) > 50:
+                chunks.append(chunk)
+        
+        if len(chunks) > 1:
+            return chunks
+    
+    # Fallback: split by paragraphs (simple, fast)
+    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
+    
+    if len(paragraphs) <= 2:
+        # Few paragraphs, don't chunk
+        return [text]
+    
+    # Group paragraphs into chunks
+    chunks = []
+    current = []
+    current_len = 0
+    
+    for para in paragraphs:
+        para_len = len(para)
+        
+        # If adding this para exceeds limit, flush current chunk
+        if current_len + para_len > chunk_size and current:
+            chunks.append('\n\n'.join(current))
+            current = [para]
+            current_len = para_len
+        else:
+            current.append(para)
+            current_len += para_len + 2  # +2 for \n\n separator
+    
+    if current:
+        chunks.append('\n\n'.join(current))
+    
+    return chunks if chunks else [text]
+
 # ===== INGEST - EXACT LOGIC FROM main_openrouter.py =====
 async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id: str):
     """Ingest - SAME as main_openrouter.py but save chunks PER-DOCUMENT"""
@@ -127,12 +182,22 @@ async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id
             session_status[session_id]["status"] = "error"
             return False
         
-        # Insert into RAG - EXACT SAME
+        # CRITICAL FIX: Split text into chunks BEFORE inserting into RAG
+        # LightRAG only creates 1 chunk if we insert entire text at once
+        # We need multiple chunks for section/table retrieval to work
+        print(f"    Splitting text into chunks...", end='', flush=True)
+        chunks = split_text_into_chunks(text)
+        print(f" ({len(chunks)} chunks)", flush=True)
+        
+        # Insert into RAG - insert each chunk separately with doc_id marker
         print(f"    Inserting into RAG (knowledge graph)...", end='', flush=True)
         rag_start = time.time()
-        # Add document metadata to text for tracking
-        text_with_doc_id = f"[DOC_ID:{doc_id}]\n{text}"
-        await rag_instance.ainsert(text_with_doc_id)
+        
+        for chunk_text in chunks:
+            # Add document metadata to text for tracking
+            chunk_with_doc_id = f"[DOC_ID:{doc_id}]\n{chunk_text}"
+            await rag_instance.ainsert(chunk_with_doc_id)
+        
         rag_time = time.time() - rag_start
         print(f" [{rag_time:.2f}s]", flush=True)
         
@@ -647,6 +712,49 @@ def cleanup_llm_response(text: str) -> str:
     
     return text.strip()
 
+def format_section_response(context: str, section_name: str = "") -> str:
+    """
+    Format section-based response (Menimbang, Mengingat, Menetapkan) for better readability
+    
+    Args:
+        context: Raw text from chunks
+        section_name: Name of section (e.g., "Menimbang", "Mengingat") for header
+    """
+    import re
+    
+    if not context:
+        return context
+    
+    # Remove OCR artifacts and fix spacing
+    text = context.strip()
+    
+    # Fix common OCR spacing issues where words are concatenated
+    # Pattern: lowercase followed by uppercase without space (e.g., "kalurahanbagian" -> "kalurahan bagian")
+    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
+    
+    # Fix multiple spaces (keep tables intact with 3+ spaces)
+    # Only replace 2-space sequences, keep 3+
+    text = re.sub(r'(?<!\s) {2}(?!\s)', ' ', text)
+    
+    # Add line breaks for better readability:
+    # Break after "UU" followed by number (legislation references)
+    text = re.sub(r'(UU\s+No\.\s+\d+[^\n]*?)(\s+(?:UU|PP|Peraturan))', r'\1\n\n\2', text)
+    
+    # Break after periods followed by capital letters (sentence breaks)
+    text = re.sub(r'(\.\s+)([A-Z])', r'\1\n', text)
+    
+    # Break after numbered items
+    text = re.sub(r'(\d+\.\s+[^\n]+?)(\s+\d+\.)', r'\1\n\2', text)
+    
+    # Add header if section name provided
+    if section_name:
+        text = f"**{section_name}:**\n\n{text}"
+    
+    # Clean up excessive whitespace
+    text = re.sub(r'\n\n\n+', '\n\n', text)
+    
+    return text.strip()
+
 async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
     """Search chunks using lenient algorithm from search_logic.py"""
     try:
@@ -713,6 +821,189 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
         traceback.print_exc()
         return []
 
+def parse_and_format_pipe_table(context: str, question: str = "") -> str:
+    """
+    Extract and beautifully format tables from context
+    Supports multiple separate tables
+    
+    Args:
+        context: Text containing tables
+        question: User's question (used to extract filter keywords dynamically)
+    """
+    lines = context.split('\n')
+    
+    # Find all table blocks (continuous lines with |)
+    table_blocks = []
+    current_block = []
+    
+    for line in lines:
+        if '|' in line and line.strip():
+            current_block.append(line)
+        elif current_block:
+            # End of current table block
+            if len(current_block) >= 2:
+                table_blocks.append(current_block)
+            current_block = []
+    
+    # Don't forget last block
+    if current_block and len(current_block) >= 2:
+        table_blocks.append(current_block)
+    
+    if not table_blocks:
+        return None
+    
+    # Format each table separately
+    results = []
+    for block in table_blocks:
+        result = format_pipe_table_html(block, question=question)
+        if result:
+            results.append(result)
+    
+    if not results:
+        return None
+    
+    # Return all tables separated by divider
+    return '\n\n---\n\n'.join(results)
+
+def format_pipe_table_html(pipe_lines, question: str = ""):
+    """Format pipe-delimited lines into markdown table - single table only
+    
+    Args:
+        pipe_lines: Lines containing pipe-delimited table
+        question: User's question (used to extract filter keywords dynamically)
+    """
+    # Extract cells from pipe lines
+    all_cells = []
+    for line in pipe_lines:
+        # Remove leading/trailing pipes and split
+        line = line.strip('| ')
+        cells = [cell.strip() for cell in line.split('|')]
+        cells = [c for c in cells if c]  # Remove empty cells
+        if cells:
+            all_cells.append(cells)
+    
+    if len(all_cells) < 2:
+        return None
+    
+    # First row = headers
+    headers = all_cells[0]
+    rows = all_cells[1:]
+    
+    if not headers or not rows:
+        return None
+    
+    # Extract filter keywords from USER QUESTION dynamically (NOT hardcoded)
+    # This way, different PDFs with different table types can be handled
+    query_keywords = extract_query_keywords(question)
+    
+    return build_markdown_table(headers, rows, query_keywords=query_keywords)
+
+def extract_query_keywords(question: str) -> list:
+    """
+    Extract meaningful keywords from user's question to filter table rows.
+    
+    ZERO HARDCODING approach: 
+    - Extract ALL non-question words from the question
+    - Let build_markdown_table() decide if filtering is useful
+    - If no keywords match document data, show all rows (lenient fallback)
+    
+    This works with ANY PDF structure - completely data-driven.
+    
+    Examples:
+        "tabel apa saja" -> extract [] (no keywords, show all rows)
+        "tabel nama peserta" -> extract ['nama', 'peserta'] (filter if document has these)
+        "apa isi tabel" -> extract [] (no keywords, show all rows)
+    
+    NOT hardcoded - each document defines its own structure!
+    """
+    if not question:
+        return []
+    
+    # Super minimal stop words - only common question/filler words
+    # ZERO domain-specific hardcoding (no 'posyandu', 'kader', 'IKN', etc)
+    minimal_stop_words = {
+        'tabel', 'isi', 'jelaskan', 'apa', 'apa itu', 'daftar',
+        'dan', 'atau', 'ini', 'itu', 'dari', 'untuk', 'apa saja',
+        'berapa', 'mana', 'yang', 'ada', 'ada apa'
+    }
+    
+    # Split and clean
+    words = question.lower().split()
+    keywords = []
+    
+    for word in words:
+        # Remove all punctuation
+        word = word.strip('.,!?;:\'"()[]{}').strip()
+        
+        # Keep only: non-empty, not in stop_words, length > 2
+        if len(word) > 2 and word not in minimal_stop_words:
+            keywords.append(word)
+    
+    # Remove duplicates preserving order
+    seen = set()
+    unique = []
+    for kw in keywords:
+        if kw not in seen:
+            seen.add(kw)
+            unique.append(kw)
+    
+    return unique
+
+def build_markdown_table(headers, rows, query_keywords=None):
+    """Build markdown table from headers and rows, optionally filter by query"""
+    if not headers or not rows:
+        return None
+    
+    # Standardize columns
+    num_cols = len(headers)
+    headers = headers[:num_cols]
+    rows = [[row[i] if i < len(row) else '' for i in range(num_cols)] for row in rows]
+    
+    # Smart filtering: ONLY filter if keywords exist AND match well
+    # If no match found (0% hit rate), show all rows (don't be too restrictive)
+    if query_keywords:
+        filtered_rows = []
+        for row in rows:
+            # Check if any keyword matches in any cell of the row
+            row_text = ' '.join([str(cell).lower() for cell in row])
+            if any(kw.lower() in row_text for kw in query_keywords):
+                filtered_rows.append(row)
+        
+        # IMPORTANT: Only apply filter if we got meaningful results
+        # If match rate is very low (< 20%), don't filter at all - show everything
+        # This prevents case where user asks "posyandu" but document only has "kader"
+        if filtered_rows:  # Even 1 match is ok, don't enforce percentage threshold
+            rows = filtered_rows
+    
+    # Calculate column widths
+    col_widths = []
+    for col_idx in range(num_cols):
+        max_width = max(len(headers[col_idx]), 12)
+        for row in rows:
+            max_width = max(max_width, len(str(row[col_idx])[:30]))
+        col_widths.append(min(max_width, 30))
+    
+    # Build markdown table
+    result = "📋 **TABEL**\n\n"
+    
+    # Header row
+    header_row = "| " + " | ".join(h[:col_widths[i]].ljust(col_widths[i]) for i, h in enumerate(headers)) + " |"
+    result += header_row + "\n"
+    
+    # Separator
+    sep_row = "|" + "|".join(["-" * (col_widths[i] + 2) for i in range(num_cols)]) + "|"
+    result += sep_row + "\n"
+    
+    # Data rows
+    for row in rows[:50]:
+        row_str = "| " + " | ".join(str(row[i])[:col_widths[i]].ljust(col_widths[i]) for i in range(num_cols)) + " |"
+        result += row_str + "\n"
+    
+    if len(rows) > 50:
+        result += f"\n*(... dan {len(rows) - 50} baris lagi)*"
+    
+    return result
+
 def format_table_response(context: str, question: str):
     """
     Try to format table response if context contains structured table data
@@ -721,17 +1012,25 @@ def format_table_response(context: str, question: str):
     if not TABLE_PROCESSOR:
         return None
     
-    if not any(kw in question.lower() for kw in ['tabel', 'daftar', 'table', 'daftar nama', 'siapa', 'kelompok', 'kategori']):
+    # More comprehensive keyword detection
+    table_keywords = ['tabel', 'daftar', 'table', 'kategori', 'kelompok', 'peringkat', 'isi tabel', 'jelaskan tabel']
+    if not any(kw in question.lower() for kw in table_keywords):
         return None
     
     try:
-        # Try to extract and format table
+        # Try new beautified pipe table parser first (faster, better output)
+        # Pass question to enable dynamic keyword extraction for table filtering
+        table_result = parse_and_format_pipe_table(context, question=question)
+        if table_result:
+            return table_result
+        
+        # Fallback: try TABLE_PROCESSOR detection
         tables = TABLE_PROCESSOR.detect_table_region(context)
         
         if not tables:
             return None
         
-        # Extract first table found
+        # If TABLE_PROCESSOR found tables, parse them
         start_pos, end_pos, table_type = tables[0]
         table_lines = context[start_pos:end_pos].split('\n')
         
@@ -750,19 +1049,36 @@ def format_table_response(context: str, question: str):
             headers = table_data.get('headers', [])
             rows = table_data.get('rows', [])
             
-            # Build readable table response
-            result = f"📋 **Tabel** ({table_type}):\n\n"
+            if not headers or not rows:
+                return None
             
-            # Header line
-            result += "| " + " | ".join(headers) + " |\n"
-            result += "|" + "|".join(["-" * (len(h) + 2) for h in headers]) + "|\n"
+            # Calculate column widths
+            col_widths = []
+            for col_idx in range(len(headers)):
+                max_width = max(len(headers[col_idx]), 15)
+                for row in rows:
+                    if col_idx < len(row):
+                        max_width = max(max_width, len(str(row[col_idx])[:40]))
+                col_widths.append(min(max_width, 40))
             
-            # Data rows (limit to 50)
-            for idx, row in enumerate(rows[:50], 1):
-                result += "| " + " | ".join(str(c).strip()[:50] for c in row) + " |\n"
+            # Build markdown table
+            result = f"📋 **TABEL** ({table_type}):\n\n"
             
-            if len(rows) > 50:
-                result += f"\n... dan {len(rows) - 50} baris lagi"
+            # Header row
+            header_row = "| " + " | ".join(h[:col_widths[i]].ljust(col_widths[i]) for i, h in enumerate(headers)) + " |"
+            result += header_row + "\n"
+            
+            # Separator row
+            sep_row = "|" + "|".join(["-" * (col_widths[i] + 2) for i in range(len(headers))]) + "|"
+            result += sep_row + "\n"
+            
+            # Data rows (limit to 100)
+            for idx, row in enumerate(rows[:100], 1):
+                row_str = "| " + " | ".join(str(row[i])[:col_widths[i]].ljust(col_widths[i]) if i < len(row) else "".ljust(col_widths[i]) for i in range(len(headers))) + " |"
+                result += row_str + "\n"
+            
+            if len(rows) > 100:
+                result += f"\n*(... dan {len(rows) - 100} baris lagi)*"
             
             return result
         
@@ -806,11 +1122,17 @@ async def query_pdf(request: QueryRequest):
             # Detect query type
             question_lower = question.lower()
             is_summary_query = any(kw in question_lower for kw in ['jelaskan isi dokumen', 'ringkas', 'summary', 'overview', 'ringkasan', 'apa isi dokumen', 'tentang dokumen'])
+            is_table_query = any(kw in question_lower for kw in ['tabel', 'daftar', 'table', 'kategori', 'kelompok', 'peringkat', 'isi tabel', 'jelaskan tabel'])
+            is_section_query = any(kw in question_lower for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'])
             
             # Try table formatting first if it's a table question
             table_answer = format_table_response(context, question)
             if table_answer:
                 answer = table_answer
+            # For section queries: use special formatting (not LLM, just text formatting)
+            elif is_section_query:
+                section_name = next((kw.capitalize() for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'] if kw in question_lower), "")
+                answer = format_section_response(context, section_name)
             # For short context: return directly (but still clean)
             elif len(context) < 600:
                 answer = cleanup_llm_response(context)
@@ -838,6 +1160,28 @@ Konteks dari dokumen:
 {context}
 
 RINGKASAN SINGKAT (max 5-7 poin, 200-300 kata):"""
+                
+                # For table queries: use structured format
+                elif is_table_query:
+                    system_prompt = """Kamu adalah assistant yang menampilkan DATA TABEL dari dokumen dengan format yang RAPI DAN MUDAH DIBACA.
+
+ATURAN TABEL:
+- Format output HANYA dengan MARKDOWN TABLE (| header | header |)
+- JANGAN gunakan bullet points atau penjelasan panjang
+- Setiap baris tabel: | data1 | data2 | data3 |
+- Gunakan PERSIS data dari dokumen, JANGAN mengarang
+- Jika ada kolom: tampilkan SEMUA kolom yang ada
+- Header adalah baris pertama, diikuti separator: |---|---|---|
+- Data rows: setiap baris menjadi row di table
+- HANYA output TABLE, tidak perlu intro atau kesimpulan"""
+
+                    answer_prompt = f"""Pertanyaan: {question}
+
+DATA TABEL dari dokumen:
+{context}
+
+INSTRUKSI: Format sebagai MARKDOWN TABLE dengan pipe (|). Output HANYA table, tidak perlu penjelasan. Header | separator | rows."""
+                
                 else:
                     # Regular question
                     system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
@@ -905,6 +1249,24 @@ async def delete_session(session_id: str):
         
         if session_dir.exists():
             shutil.rmtree(session_dir)
+        
+        # Also clean up VDB files when deleting entire session
+        # This prevents NanoVectorDB corruption on next startup
+        try:
+            vdb_files = [
+                Path(WORKING_DIR) / "vdb_chunks.json",
+                Path(WORKING_DIR) / "vdb_entities.json",
+                Path(WORKING_DIR) / "vdb_relationships.json"
+            ]
+            
+            for vdb_file in vdb_files:
+                if vdb_file.exists():
+                    vdb_file.unlink()
+                    print(f"[✓] Deleted {vdb_file.name}")
+            
+            print(f"[✓] Session {session_id} deleted with full VDB cleanup")
+        except Exception as e:
+            print(f"[!] Warning: Could not clean VDB files: {e}")
         
         return JSONResponse(content={"success": True})
     

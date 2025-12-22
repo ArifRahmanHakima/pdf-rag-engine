@@ -152,8 +152,17 @@ async function handleFileSelect(file) {
         pdfType = 'PDF (unknown type)';
     }
     
-    // Calculate estimate time (rough: ~2-3 sec per page for OCR)
-    const estimatedSeconds = pageCount !== '?' ? Math.ceil(pageCount * 2.5) : 30;
+    // Calculate estimate time
+    // Scanned PDF (OCR): ~5-6 sec/page (Tesseract + RAG + chunking)
+    // Digital PDF: ~2 sec/page (RAG + chunking)
+    let estimatedSeconds;
+    if (pageCount === '?') {
+        estimatedSeconds = 90;  // Conservative estimate
+    } else if (pdfType.includes('Scanned')) {
+        estimatedSeconds = Math.ceil(pageCount * 5.5) + 5; // 5.5 sec/page + 5 sec overhead for chunking
+    } else {
+        estimatedSeconds = Math.ceil(pageCount * 2) + 3; // 2 sec/page + 3 sec overhead
+    }
     const estimatedTime = estimatedSeconds < 60 
         ? `~${estimatedSeconds} detik` 
         : `~${Math.ceil(estimatedSeconds / 60)} menit`;
@@ -802,6 +811,107 @@ async function sendMessage() {
     }
 }
 
+function formatMarkdownTables(text) {
+    /**
+     * Convert markdown pipe tables to HTML tables
+     * Supports: | header | header |
+     *           |--------|--------|
+     *           | data   | data   |
+     */
+    const lines = text.split('\n');
+    const tableRegex = /^\s*\|.*\|\s*$/;
+    
+    let result = [];
+    let inTable = false;
+    let tableLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+        const line = lines[i];
+        
+        if (tableRegex.test(line)) {
+            if (!inTable) {
+                inTable = true;
+                tableLines = [line];
+            } else {
+                tableLines.push(line);
+            }
+        } else {
+            if (inTable && tableLines.length > 1) {
+                // Convert accumulated table lines to HTML
+                const htmlTable = convertTableLinesToHTML(tableLines);
+                result.push(htmlTable);
+                tableLines = [];
+            }
+            inTable = false;
+            result.push(line);
+        }
+    }
+    
+    // Handle last table if exists
+    if (inTable && tableLines.length > 1) {
+        const htmlTable = convertTableLinesToHTML(tableLines);
+        result.push(htmlTable);
+    }
+    
+    return result.join('\n');
+}
+
+function convertTableLinesToHTML(tableLines) {
+    /**
+     * Convert markdown table lines to HTML table
+     * Lines format: | col1 | col2 | col3 |
+     */
+    if (tableLines.length < 2) return tableLines.join('\n');
+    
+    // Parse headers (first line)
+    const headerLine = tableLines[0];
+    const headers = headerLine.split('|').map(h => h.trim()).filter(h => h);
+    
+    if (headers.length === 0) return tableLines.join('\n');
+    
+    // Skip separator line (line 1)
+    // Parse data rows (line 2+)
+    const rows = [];
+    for (let i = 2; i < tableLines.length; i++) {
+        const line = tableLines[i];
+        if (!tableRegex.test(line)) break;
+        
+        const cells = line.split('|').map(c => c.trim()).filter(c => c);
+        if (cells.length > 0) {
+            // Pad cells to match header count
+            while (cells.length < headers.length) {
+                cells.push('');
+            }
+            rows.push(cells.slice(0, headers.length));
+        }
+    }
+    
+    if (rows.length === 0) return tableLines.join('\n');
+    
+    // Build HTML table with proper escaping
+    let html = '<table><thead><tr>';
+    headers.forEach(h => {
+        const escaped = escapeHtml(h).replace(/\s+/g, ' ');
+        html += `<th>${escaped}</th>`;
+    });
+    html += '</tr></thead><tbody>';
+    
+    rows.forEach(row => {
+        html += '<tr>';
+        for (let i = 0; i < headers.length; i++) {
+            const cell = (row[i] || '').trim();
+            const escaped = escapeHtml(cell).replace(/\s+/g, ' ');
+            html += `<td>${escaped}</td>`;
+        }
+        html += '</tr>';
+    });
+    
+    html += '</tbody></table>';
+    return html;
+}
+
+const tableRegex = /^\s*\|.*\|\s*$/;
+
 function addMessage(text, sender, save = true) {
     const msg = document.createElement('div');
     msg.className = `message ${sender}`;
@@ -813,8 +923,11 @@ function addMessage(text, sender, save = true) {
         msg.className = 'chat-message assistant-message';
     }
     
+    // Convert markdown tables to HTML before displaying
+    const formattedText = formatMarkdownTables(text);
+    
     msg.innerHTML = `
-        <div class="message-content">${escapeHtml(text)}</div>
+        <div class="message-content">${formattedText}</div>
         <div class="message-time">${new Date().toLocaleTimeString()}</div>
     `;
     
