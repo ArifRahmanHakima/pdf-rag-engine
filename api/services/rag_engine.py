@@ -151,16 +151,16 @@ def get_rag_instance(doc_id: str, file_path: str = None):
                 enable_equation_processing=False,  # Nonaktifkan pemrosesan persamaan
             )
             document_exists = check_document_exists(doc_id)
+            with Timer(f"Load LightRAG ({doc_id})"):
+                lightrag_instance = LightRAG(
+                    working_dir=doc_working_dir,
+                    llm_model_func=llm_model_func,
+                    embedding_func=embedding_func,
+                    # entity_extract_max_gleaning=1,  # Kurangi ekstraksi entity
+                    # enable_local_query=True,
+                )
             if document_exists:
-                print(f"📂 Memuat dokumen yang sudah ada: {doc_id}")
-                with Timer(f"Load LightRAG ({doc_id})"):
-                    lightrag_instance = LightRAG(
-                        working_dir=doc_working_dir,
-                        llm_model_func=llm_model_func,
-                        embedding_func=embedding_func,
-                        # entity_extract_max_gleaning=1,  # Kurangi ekstraksi entity
-                        # enable_local_query=True,
-                    )
+                print(f"\U0001f4c2 Memuat dokumen yang sudah ada: {doc_id}")
                 rag_instances[doc_id] = RAGAnything(
                     config=config,
                     llm_model_func=llm_model_func,
@@ -168,15 +168,16 @@ def get_rag_instance(doc_id: str, file_path: str = None):
                     embedding_func=embedding_func,
                     lightrag=lightrag_instance,
                 )
-                print(f"✅ RAG berhasil dimuat: {doc_id}")
+                print(f"\u2705 RAG berhasil dimuat: {doc_id}")
             else:
                 rag_instances[doc_id] = RAGAnything(
                     config=config,
                     llm_model_func=llm_model_func,
                     vision_model_func=vision_model_func,
                     embedding_func=embedding_func,
+                    lightrag=lightrag_instance,
                 )
-                print(f"✅ RAG baru dibuat: {doc_id}")
+                print(f"\u2705 RAG baru dibuat: {doc_id}")
             # Simpan hasil analisis di instance
             if pdf_analysis:
                 rag_instances[doc_id]._pdf_analysis = pdf_analysis

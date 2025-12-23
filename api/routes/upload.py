@@ -217,13 +217,16 @@ async def delete_document_endpoint(doc_id: str):
     - Metadata file
     """
     try:
-        # Get document info first
+        # Get document info first (DB first, fallback ke metadata file)
+        metadata = load_docs_metadata()
         doc = get_document_by_id(doc_id)
+        if not doc:
+            doc = metadata.get(doc_id)
         if not doc:
             raise HTTPException(status_code=404, detail="Dokumen tidak ditemukan")
         
-        file_name = doc.get("file_name", "")
-        file_path = doc.get("file_path", "")
+        file_name = doc.get("file_name", "") or doc.get("fileName", "")
+        file_path = doc.get("file_path", "") or doc.get("filePath", "")
         
         # 1. Clear RAG instance from memory
         try:
