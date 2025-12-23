@@ -1,5 +1,5 @@
 """
-Qwen Embedding - Using Qwen3-embedding-0.6B model
+Qwen Embedding Service - Using Qwen3-embedding-0.6B model
 """
 
 import numpy as np

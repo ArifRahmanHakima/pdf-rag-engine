@@ -719,10 +719,14 @@ body {
     z-index: 1000;
     align-items: center;
     justify-content: center;
+    flex-direction: column;
+    opacity: 0;
+    transition: opacity 0.3s ease-in-out;
 }
 
 .modal.show {
     display: flex;
+    opacity: 1;
 }
 
 .modal-content {
@@ -735,6 +739,22 @@ body {
     flex-direction: column;
     overflow: hidden;
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+    animation: slideDown 0.3s ease-out;
+}
+
+.modal.show .modal-content {
+    animation: slideDown 0.3s ease-out;
+}
+
+@keyframes slideDown {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
 }
 
 .modal-header {
@@ -853,6 +873,83 @@ body {
     to {
         transform: rotate(360deg);
     }
+}
+
+/* ===== DISCLAIMER FOOTER ===== */
+.disclaimer-footer {
+    background: #fff3cd;
+    border-top: 1px solid #ffc107;
+    padding: 10px 15px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #856404;
+    flex-wrap: wrap;
+    justify-content: center;
+}
+
+.disclaimer-text {
+    font-weight: 500;
+}
+
+.disclaimer-link {
+    background: none;
+    border: none;
+    color: #0066cc;
+    cursor: pointer;
+    text-decoration: underline;
+    padding: 0;
+    font-size: 12px;
+    font-weight: 600;
+    transition: color 0.2s;
+}
+
+.disclaimer-link:hover {
+    color: #0052a3;
+}
+
+/* ===== DISCLAIMER MODAL ===== */
+.modal-disclaimer {
+    max-width: 600px;
+    max-height: 90vh;
+    overflow-y: auto;
+}
+
+.disclaimer-content {
+    color: #333;
+    line-height: 1.6;
+}
+
+.disclaimer-content h3 {
+    font-size: 18px;
+    margin-top: 0;
+    margin-bottom: 12px;
+    color: #333;
+    font-weight: 600;
+}
+
+.disclaimer-content h4 {
+    font-size: 14px;
+    margin-top: 16px;
+    margin-bottom: 8px;
+    color: #555;
+    font-weight: 600;
+}
+
+.disclaimer-content p {
+    margin-bottom: 12px;
+    font-size: 14px;
+}
+
+.disclaimer-content ul {
+    margin: 10px 0 12px 20px;
+    font-size: 14px;
+}
+
+.disclaimer-content ul li {
+    margin-bottom: 6px;
+    line-height: 1.5;
 }
 
 /* ===== Scrollbar Styling ===== */

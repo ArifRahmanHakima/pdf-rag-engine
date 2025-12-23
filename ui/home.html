@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>RAG Chatbot - Intelligent PDF Analysis</title>
+    <link rel="stylesheet" href="/static/css/home.css?v=1">
+</head>
+<body>
+    <div class="home-container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <div class="logo">
+                    <span class="logo-icon">📚</span>
+                    <h1>RAG Chatbot</h1>
+                </div>
+                <p class="tagline">Intelligent PDF Analysis & Question Answering</p>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Hero Section -->
+            <section class="hero">
+                <div class="hero-content">
+                    <h2>Upload Your PDFs & Get Instant Answers</h2>
+                    <p>
+                        RAG Chatbot menggunakan teknologi AI terkini untuk menganalisis dokumen PDF Anda
+                        dan menjawab pertanyaan dengan presisi tinggi. Hemat waktu dalam memahami konten dokumen.
+                    </p>
+                    <a href="/chat" class="btn-primary btn-large">
+                        <span>🚀 Mulai Chatting</span>
+                    </a>
+                </div>
+                <div class="hero-image">
+                    <div class="illustration">
+                        <span class="icon-large">💬</span>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Features Section -->
+            <section class="features">
+                <h2>Fitur Unggulan</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">📄</div>
+                        <h3>Upload PDF</h3>
+                        <p>Upload dokumen PDF dengan mudah. Sistem kami mendukung berbagai format dokumen.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">🤖</div>
+                        <h3>AI-Powered</h3>
+                        <p>Teknologi AI canggih untuk analisis mendalam dan pemahaman konteks dokumen.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">⚡</div>
+                        <h3>Instant Response</h3>
+                        <p>Dapatkan jawaban cepat atas pertanyaan Anda tentang isi dokumen.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">🔍</div>
+                        <h3>Semantic Search</h3>
+                        <p>Pencarian semantik mendalam untuk menemukan informasi yang paling relevan.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">📊</div>
+                        <h3>Table Recognition</h3>
+                        <p>Otomatis mendeteksi dan memformat tabel dalam dokumen untuk tampilan yang lebih baik.</p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">🔐</div>
+                        <h3>Secure Processing</h3>
+                        <p>Dokumen Anda diproses dengan aman dan privasi terjaga.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- How It Works Section -->
+            <section class="how-it-works">
+                <h2>Cara Kerja</h2>
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-number">1</div>
+                        <h3>Upload PDF</h3>
+                        <p>Unggah dokumen PDF Anda ke sistem</p>
+                    </div>
+                    <div class="step-arrow">→</div>
+                    <div class="step">
+                        <div class="step-number">2</div>
+                        <h3>Process</h3>
+                        <p>Sistem menganalisis dan mengindeks konten</p>
+                    </div>
+                    <div class="step-arrow">→</div>
+                    <div class="step">
+                        <div class="step-number">3</div>
+                        <h3>Ask Questions</h3>
+                        <p>Tanyakan apa saja tentang dokumen Anda</p>
+                    </div>
+                    <div class="step-arrow">→</div>
+                    <div class="step">
+                        <div class="step-number">4</div>
+                        <h3>Get Answers</h3>
+                        <p>Dapatkan jawaban akurat dengan referensi</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Info Section -->
+            <section class="info">
+                <div class="info-card">
+                    <h3>⚠️ Penting!</h3>
+                    <p>
+                        Jawaban yang diberikan bot mungkin mengandung kesalahan. 
+                        Selalu lakukan verifikasi mandiri dengan membaca dokumen asli untuk keputusan penting.
+                    </p>
+                    <a href="#" class="info-link" onclick="showDisclaimerModal()">Pelajari lebih lanjut →</a>
+                </div>
+            </section>
+
+            <!-- CTA Section -->
+            <section class="cta">
+                <h2>Siap Memulai?</h2>
+                <p>Tingkatkan produktivitas Anda dengan analisis dokumen berbasis AI</p>
+                <a href="/chat" class="btn-primary btn-large">
+                    <span>🚀 Mulai Sekarang</span>
+                </a>
+            </section>
+        </main>
+
+        <!-- Footer -->
+        <footer class="footer">
+            <p>&copy; 2025 RAG Chatbot. Powered by LightRAG & Claude AI.</p>
+            <p class="footer-disclaimer">
+                <a href="#" onclick="showDisclaimerModal()">Disclaimer</a> | 
+                <a href="#" onclick="alert('Privacy: Dokumen Anda tidak disimpan setelah sesi berakhir.')">Privacy</a>
+            </p>
+        </footer>
+    </div>
+
+    <!-- Disclaimer Modal -->
+    <div id="disclaimerModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>⚠️ Pernyataan Penting</h2>
+                <button class="modal-close" onclick="closeDisclaimerModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="disclaimer-content">
+                    <h3>Batasan dan Ketidakakuratan Bot</h3>
+                    <p>
+                        Bot AI ini dirancang untuk membantu Anda dalam menganalisis dan mencari informasi dari dokumen PDF. 
+                        Namun, <strong>jawaban yang diberikan mungkin mengandung kesalahan, ketidakakuratan, atau interpretasi yang salah</strong>.
+                    </p>
+
+                    <h4>Alasan Potensi Kesalahan:</h4>
+                    <ul>
+                        <li><strong>Keterbatasan Model AI:</strong> Model bahasa memiliki keterbatasan dalam memahami konteks kompleks</li>
+                        <li><strong>Kualitas Dokumen:</strong> Dokumen buruk atau tabel kompleks dapat menyebabkan ekstraksi tidak akurat</li>
+                        <li><strong>Ambiguitas:</strong> Pertanyaan ambigu dapat menghasilkan interpretasi salah</li>
+                        <li><strong>Hallucination:</strong> Bot dapat menghasilkan informasi yang tidak ada di dokumen</li>
+                    </ul>
+
+                    <h4>Rekomendasi:</h4>
+                    <p><strong>Selalu lakukan verifikasi mandiri (DWYOR - Do With Your Own Research)</strong></p>
+                    <ul>
+                        <li>✓ Membaca langsung bagian relevan dari dokumen asli</li>
+                        <li>✓ Membandingkan dengan sumber lain yang terpercaya</li>
+                        <li>✓ Tidak mengandalkan 100% pada jawaban bot untuk hal-hal kritis</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function showDisclaimerModal() {
+            document.getElementById('disclaimerModal').classList.add('show');
+        }
+
+        function closeDisclaimerModal() {
+            document.getElementById('disclaimerModal').classList.remove('show');
+        }
+
+        // Close modal when clicking outside
+        document.getElementById('disclaimerModal').addEventListener('click', (e) => {
+            if (e.target.id === 'disclaimerModal') {
+                closeDisclaimerModal();
+            }
+        });
+    </script>
+</body>
+</html>

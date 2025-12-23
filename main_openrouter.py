@@ -25,8 +25,8 @@ logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("easyocr").setLevel(logging.ERROR)
 
 from raganything.config import RAGAnythingConfig
-from embedding_qwen import load_embedding_model, get_embedding_func
-from llm_openrouter import llm_model_func_openrouter
+from app.services.embedding_service import load_embedding_model, get_embedding_func
+from app.services.llm_service import llm_model_func_openrouter
 
 # Configure pytesseract for Tesseract OCR (if installed)
 try:

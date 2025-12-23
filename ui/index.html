@@ -7,7 +7,7 @@
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
     <title>RAG Chatbot - ChatPDF Style</title>
-    <link rel="stylesheet" href="/static/css/style.css?v=2">
+    <link rel="stylesheet" href="/static/css/style.css?v=3">
     <!-- PDF.js for extracting PDF metadata -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
@@ -83,6 +83,12 @@
                     Send
                 </button>
             </div>
+
+            <!-- Disclaimer Footer -->
+            <div class="disclaimer-footer">
+                <span class="disclaimer-text">⚠️ Jawaban bot mungkin mengandung kesalahan. </span>
+                <button class="disclaimer-link" id="disclaimerBtn">Pelajari lebih lanjut</button>
+            </div>
         </div>
     </div>
 
@@ -141,6 +147,55 @@
         <p>Processing...</p>
     </div>
 
-    <script src="/static/js/app.js?v=2"></script>
+    <!-- Disclaimer Modal -->
+    <div id="disclaimerModal" class="modal">
+        <div class="modal-content modal-disclaimer">
+            <div class="modal-header">
+                <h2>⚠️ Pernyataan Penting</h2>
+                <button class="modal-close" onclick="document.getElementById('disclaimerModal').classList.remove('show')">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="disclaimer-content">
+                    <h3>Batasan dan Ketidakakuratan Bot</h3>
+                    <p>
+                        Bot AI ini dirancang untuk membantu Anda dalam menganalisis dan mencari informasi dari dokumen PDF. 
+                        Namun, <strong>jawaban yang diberikan mungkin mengandung kesalahan, ketidakakuratan, atau interpretasi yang salah</strong>.
+                    </p>
+
+                    <h4>Alasan Potensi Kesalahan:</h4>
+                    <ul>
+                        <li><strong>Keterbatasan Model AI:</strong> Model bahasa memiliki keterbatasan dalam memahami konteks kompleks dan nuansa bahasa</li>
+                        <li><strong>Kualitas Dokumen:</strong> Dokumen yang buruk, tulisan tangan, atau tabel kompleks dapat menyebabkan ekstraksi yang tidak akurat</li>
+                        <li><strong>Ambiguitas:</strong> Pertanyaan yang ambigu atau konteks yang kurang jelas dapat menghasilkan interpretasi yang salah</li>
+                        <li><strong>Hallucination:</strong> Bot dapat menghasilkan informasi yang tidak ada dalam dokumen asli</li>
+                        <li><strong>Batasan Konteks:</strong> Bot mungkin tidak mempertimbangkan seluruh konteks dokumen</li>
+                    </ul>
+
+                    <h4>Rekomendasi:</h4>
+                    <p>
+                        <strong>Selalu lakukan verifikasi mandiri (DWYOR - Do With Your Own Research)</strong> dengan:
+                    </p>
+                    <ul>
+                        <li>✓ Membaca langsung bagian relevan dari dokumen asli</li>
+                        <li>✓ Membandingkan dengan sumber lain yang terpercaya</li>
+                        <li>✓ Berkonsultasi dengan ahli jika diperlukan untuk keputusan penting</li>
+                        <li>✓ Tidak mengandalkan 100% pada jawaban bot untuk hal-hal kritis</li>
+                    </ul>
+
+                    <h4>Tanggung Jawab Pengguna:</h4>
+                    <p>
+                        Pengguna <strong>sepenuhnya bertanggung jawab</strong> atas penggunaan informasi dari bot ini. 
+                        Jangan gunakan jawaban bot untuk keputusan hukum, medis, atau bisnis penting tanpa verifikasi lebih lanjut.
+                    </p>
+
+                    <p style="margin-top: 20px; padding: 15px; background: #fff3cd; border-radius: 8px; border-left: 4px solid #ffc107;">
+                        <strong>Catatan:</strong> Bot ini adalah alat bantu untuk efisiensi. Gunakan dengan bijak dan selalu verifikasi informasi penting.
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js?v=3"></script>
 </body>
 </html>

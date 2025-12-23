@@ -53,6 +53,22 @@ document.addEventListener('DOMContentLoaded', () => {
 
     console.log('[JS] Elements loaded:', { uploadBtn, uploadModal, uploadArea });
 
+    // ===== Disclaimer Handler =====
+    const disclaimerBtn = document.getElementById('disclaimerBtn');
+    const disclaimerModal = document.getElementById('disclaimerModal');
+    if (disclaimerBtn) {
+        disclaimerBtn.addEventListener('click', () => {
+            disclaimerModal.classList.add('show');
+        });
+    }
+    if (disclaimerModal) {
+        disclaimerModal.addEventListener('click', (e) => {
+            if (e.target === disclaimerModal) {
+                disclaimerModal.classList.remove('show');
+            }
+        });
+    }
+
     // ===== Event Listeners =====
     if (uploadBtn) {
         uploadBtn.addEventListener('click', () => {
@@ -926,8 +942,20 @@ function addMessage(text, sender, save = true) {
     // Convert markdown tables to HTML before displaying
     const formattedText = formatMarkdownTables(text);
     
+    // Check if text contains HTML table (don't escape it)
+    const hasTable = formattedText.includes('<table>');
+    
+    let contentHtml;
+    if (hasTable) {
+        // Text has table - use it as-is (already formatted)
+        contentHtml = formattedText;
+    } else {
+        // Regular text - escape it
+        contentHtml = escapeHtml(formattedText);
+    }
+    
     msg.innerHTML = `
-        <div class="message-content">${formattedText}</div>
+        <div class="message-content">${contentHtml}</div>
         <div class="message-time">${new Date().toLocaleTimeString()}</div>
     `;
     

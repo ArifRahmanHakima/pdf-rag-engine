@@ -1,55 +1,82 @@
 """
-FastAPI Server - EXACT SAME LOGIC AS main_openrouter.py
-Copy-paste flow: Create RAG → Initialize → Ingest → Query
+FastAPI RAG Chatbot Server - Main entry point
+Modular architecture with services and handlers separated
 """
 
-import os, json, time, asyncio, shutil, io, sys, re
+import os, sys, io, json
 from pathlib import Path
-from datetime import datetime
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 load_dotenv()
 
-# Set LightRAG timeout BEFORE imports - prevent long-running tasks
-os.environ["LIGHTRAG_TIMEOUT"] = "300"  # 5 minutes for entity/relation extraction
-
-# Same logging setup as main_openrouter.py
+# Suppress library logging
+os.environ["LIGHTRAG_TIMEOUT"] = "300"
 import logging
 logging.getLogger("lightrag").setLevel(logging.ERROR)
 logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
 logging.getLogger("transformers").setLevel(logging.ERROR)
 logging.getLogger("easyocr").setLevel(logging.ERROR)
 
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import FastAPI
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 import uvicorn
 
-# Same imports as main_openrouter.py
+# Core imports
 from raganything.config import RAGAnythingConfig
-from embedding_qwen import load_embedding_model, get_embedding_func
-from llm_openrouter import llm_model_func_openrouter
+from app.services.embedding_service import load_embedding_model, get_embedding_func
+from app.services.llm_service import llm_model_func_openrouter
 from lightrag import LightRAG
-from search_logic import search_chunks_strict
-
-# Import extraction - EXACT SAME from main_openrouter.py
+from app.services.search_logic import search_chunks_strict
 from main_openrouter import extract_text_from_pdf_with_ocr
 
-# Import table processor for formatting tables
+# Modular imports
+from app.utils import (
+    get_next_session_id,
+    get_session_metadata,
+    save_session_metadata,
+    cleanup_llm_response,
+    format_section_response,
+    format_table_response,
+)
+
+from app.services import (
+    ingest_pdf_async,
+    search_chunks_from_session,
+    delete_document_service,
+    delete_session_service,
+    process_query,
+)
+
+from app.handlers import (
+    QueryRequest,
+    get_upload_handler,
+    get_documents_handler,
+    get_select_document_handler,
+    get_list_sessions_handler,
+    get_status_handler,
+    get_pdf_handler,
+    get_pdf_fallback_handler,
+    get_delete_document_handler,
+    get_query_handler,
+    get_delete_session_handler,
+    get_ui_handler,
+)
+
+# Optional table processor
 try:
-    from table_processor import TableProcessor
+    from app.utils.table_processor import TableProcessor
     TABLE_PROCESSOR = TableProcessor()
     print("[✓] Table processor loaded")
 except Exception as e:
     print(f"[!] Table processor not available: {e}")
     TABLE_PROCESSOR = None
 
-print("\n[*] Starting RAG Server (same logic as main_openrouter.py)...\n")
+print("\n[*] Starting RAG Server (modular architecture)...\n")
 
-# Same config as main_openrouter.py
+# Configuration
 config = RAGAnythingConfig()
 WORKING_DIR = config.working_dir
 SESSIONS_DIR = Path(WORKING_DIR) / "pdf_sessions"
@@ -60,239 +87,68 @@ embedding_func = None
 rag_instance = None
 session_status = {}
 
-class QueryRequest(BaseModel):
-    session_id: str
-    doc_id: str
-    question: str
 
-# ===== HELPERS - SAME AS main_openrouter.py =====
 def _load_embedding_model():
-    """Load embedding model - returns embedding_func"""
+    """Load embedding model"""
     old_stdout = sys.stdout
     sys.stdout = io.StringIO()
     load_embedding_model()
     sys.stdout = old_stdout
-    
     embedding_func = get_embedding_func()
     print("[✓] Qwen embedding model loaded\n")
     return embedding_func
 
-def get_next_session_id() -> str:
-    SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-    existing = [d for d in SESSIONS_DIR.iterdir() if d.is_dir()]
-    if not existing:
-        return "folder_1"
-    
-    numbers = []
-    for d in existing:
-        try:
-            num = int(d.name.split("_")[1])
-            numbers.append(num)
-        except:
-            pass
-    
-    return f"folder_{max(numbers) + 1 if numbers else 1}"
 
-def get_session_metadata(session_id: str):
-    metadata_file = SESSIONS_DIR / session_id / "metadata.json"
-    if metadata_file.exists():
-        with open(metadata_file) as f:
-            return json.load(f)
-    return None
+def _restore_sessions():
+    """Restore session state from disk on startup"""
+    global session_status
+    
+    if not SESSIONS_DIR.exists():
+        return
+    
+    # Load all session metadata
+    for session_dir in SESSIONS_DIR.iterdir():
+        if session_dir.is_dir():
+            session_id = session_dir.name
+            metadata_file = session_dir / "metadata.json"
+            
+            if metadata_file.exists():
+                try:
+                    with open(metadata_file, 'r', encoding='utf-8') as f:
+                        metadata = json.load(f)
+                    # Restore session status
+                    session_status[session_id] = {
+                        "status": "ready",
+                        "progress": "Restored",
+                        "selected_doc": metadata.get("selected_doc", "")
+                    }
+                    print(f"[✓] Restored session: {session_id}")
+                except Exception as e:
+                    print(f"[!] Error restoring session {session_id}: {e}")
+    
+    if session_status:
+        print(f"[✓] Restored {len(session_status)} sessions\n")
 
-def save_session_metadata(session_id: str, metadata: dict):
-    session_dir = SESSIONS_DIR / session_id
-    session_dir.mkdir(parents=True, exist_ok=True)
-    with open(session_dir / "metadata.json", 'w') as f:
-        json.dump(metadata, f, indent=2)
-
-def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200) -> list:
-    """
-    Split text into overlapping chunks for better RAG processing
-    CRITICAL: Keep tables intact - don't split tables across chunks
-    OPTIMIZED: Fast-path for small texts, simple split logic
-    """
-    # Fast path: if text is small, don't chunk
-    if len(text) < chunk_size:
-        return [text]
-    
-    # Try simple split by section headers first (fastest)
-    import re
-    sections = re.split(r'(?:^|\n)(MENIMBANG|MENGINGAT|MENETAPKAN|MEMUTUSKAN|DAFTAR|LAMPIRAN|BAB)', text, flags=re.IGNORECASE | re.MULTILINE, maxsplit=10)
-    
-    if len(sections) > 3:  # Found sections
-        chunks = []
-        for i in range(1, len(sections), 2):
-            header = sections[i]
-            content = sections[i+1] if i+1 < len(sections) else ""
-            chunk = (header + content).strip()
-            if chunk and len(chunk) > 50:
-                chunks.append(chunk)
-        
-        if len(chunks) > 1:
-            return chunks
-    
-    # Fallback: split by paragraphs (simple, fast)
-    paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
-    
-    if len(paragraphs) <= 2:
-        # Few paragraphs, don't chunk
-        return [text]
-    
-    # Group paragraphs into chunks
-    chunks = []
-    current = []
-    current_len = 0
-    
-    for para in paragraphs:
-        para_len = len(para)
-        
-        # If adding this para exceeds limit, flush current chunk
-        if current_len + para_len > chunk_size and current:
-            chunks.append('\n\n'.join(current))
-            current = [para]
-            current_len = para_len
-        else:
-            current.append(para)
-            current_len += para_len + 2  # +2 for \n\n separator
-    
-    if current:
-        chunks.append('\n\n'.join(current))
-    
-    return chunks if chunks else [text]
-
-# ===== INGEST - EXACT LOGIC FROM main_openrouter.py =====
-async def ingest_pdf_async(session_id: str, pdf_path: str, filename: str, doc_id: str):
-    """Ingest - SAME as main_openrouter.py but save chunks PER-DOCUMENT"""
-    global rag_instance
-    
-    try:
-        print(f"\n[*] Processing {filename}", flush=True)
-        file_start = time.time()
-        
-        # Extract text with easyocr - EXACT SAME
-        print(f"    Extracting text with OCR...", end='', flush=True)
-        ocr_start = time.time()
-        text = extract_text_from_pdf_with_ocr(pdf_path, use_ocr=True)
-        ocr_time = time.time() - ocr_start
-        print(f" [{ocr_time:.2f}s]", flush=True)
-        
-        if not text.strip():
-            print(f"[!] No text extracted\n", flush=True)
-            session_status[session_id]["status"] = "error"
-            return False
-        
-        # CRITICAL FIX: Split text into chunks BEFORE inserting into RAG
-        # LightRAG only creates 1 chunk if we insert entire text at once
-        # We need multiple chunks for section/table retrieval to work
-        print(f"    Splitting text into chunks...", end='', flush=True)
-        chunks = split_text_into_chunks(text)
-        print(f" ({len(chunks)} chunks)", flush=True)
-        
-        # Insert into RAG - insert each chunk separately with doc_id marker
-        print(f"    Inserting into RAG (knowledge graph)...", end='', flush=True)
-        rag_start = time.time()
-        
-        for chunk_text in chunks:
-            # Add document metadata to text for tracking
-            chunk_with_doc_id = f"[DOC_ID:{doc_id}]\n{chunk_text}"
-            await rag_instance.ainsert(chunk_with_doc_id)
-        
-        rag_time = time.time() - rag_start
-        print(f" [{rag_time:.2f}s]", flush=True)
-        
-        file_time = time.time() - file_start
-        
-        # Save chunks PER-DOCUMENT (not mixed together!)
-        session_dir = SESSIONS_DIR / session_id
-        src_chunks = Path(WORKING_DIR) / "kv_store_text_chunks.json"
-        
-        # Create document-specific chunk directory
-        doc_chunks_dir = session_dir / "documents" / doc_id
-        doc_chunks_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Copy chunks file for THIS document ONLY
-        # Note: LightRAG stores all chunks in global file, we copy for per-doc access
-        if src_chunks.exists():
-            dst_chunks = doc_chunks_dir / "chunks.json"
-            # COPY the entire chunks file (same as global)
-            # Each document gets reference to all chunks
-            # Search function will handle filtering by relevance
-            shutil.copy(src_chunks, dst_chunks)
-            print(f"[✓] Chunks reference saved to document {doc_id}\n")
-        
-        num_pages = text.count("=== Page")
-        
-        # Extract full_doc_id from newly created chunks in global store
-        full_doc_id = None
-        try:
-            src_chunks = Path(WORKING_DIR) / "kv_store_text_chunks.json"
-            if src_chunks.exists():
-                with open(src_chunks, encoding='utf-8', errors='ignore') as f:
-                    all_chunks = json.load(f)
-                    # Find first chunk with full_doc_id (should be the ones we just inserted)
-                    for chunk_id, chunk_data in all_chunks.items():
-                        if isinstance(chunk_data, dict) and 'full_doc_id' in chunk_data:
-                            full_doc_id = chunk_data['full_doc_id']
-                            break
-        except Exception as e:
-            print(f"[!] Error extracting full_doc_id: {e}")
-        
-        # Update session document list
-        session_docs_file = session_dir / "documents.json"
-        docs = {}
-        if session_docs_file.exists():
-            with open(session_docs_file) as f:
-                docs = json.load(f)
-        
-        docs[doc_id] = {
-            "doc_id": doc_id,
-            "filename": filename,
-            "upload_time": datetime.now().isoformat(),
-            "pages": num_pages,
-            "size": len(text),
-            "full_doc_id": full_doc_id  # Store for later use in delete
-        }
-        
-        with open(session_docs_file, 'w') as f:
-            json.dump(docs, f, indent=2)
-        
-        # Update status - mark first document as selected by default
-        if session_id not in session_status:
-            session_status[session_id] = {"status": "ready", "selected_doc": doc_id}
-        else:
-            session_status[session_id]["status"] = "ready"
-            if "selected_doc" not in session_status[session_id]:
-                session_status[session_id]["selected_doc"] = doc_id
-        
-        print(f"[✓] Ingested in {file_time:.2f}s total (OCR: {ocr_time:.2f}s, RAG: {rag_time:.2f}s)\n", flush=True)
-        return True
-    
-    except Exception as e:
-        print(f"[!] Error: {str(e)[:80]}\n", flush=True)
-        import traceback
-        traceback.print_exc()
-        session_status[session_id]["status"] = "error"
-        return False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global embedding_func, rag_instance
     
-    # Startup - EXACT SAME as main_openrouter.py main()
     print("[*] Initializing system...")
     
     # Load embedding model
     embedding_func = _load_embedding_model()
+    globals()['embedding_func'] = embedding_func  # Ensure global assignment
     
-    # Create RAG - EXACT SAME
+    # Create RAG instance
     rag_instance = LightRAG(
         working_dir=WORKING_DIR,
         llm_model_func=llm_model_func_openrouter,
         embedding_func=embedding_func,
     )
+    globals()['rag_instance'] = rag_instance  # Ensure global assignment
     
-    # Initialize storages - EXACT SAME
+    # Initialize storages
     await rag_instance.initialize_storages()
     try:
         from lightrag.kg.shared_storage import initialize_pipeline_status
@@ -300,13 +156,17 @@ async def lifespan(app: FastAPI):
     except:
         pass
     
+    # Restore sessions from disk
+    _restore_sessions()
+    
     print("[✓] System ready\n")
     
     yield
     
     print("\n[*] Shutting down...")
 
-# ===== FastAPI App =====
+
+# FastAPI App
 app = FastAPI(title="RAG Chatbot", lifespan=lifespan)
 
 app.add_middleware(
@@ -318,965 +178,100 @@ app.add_middleware(
 )
 
 print("="*70)
-print("[RAG CHATBOT SERVER]")
-print("="*70)
-print(f"[*] EXACT same logic as main_openrouter.py")
+print("[RAG CHATBOT SERVER - MODULAR ARCHITECTURE]")
 print("="*70 + "\n")
 
-# ===== ENDPOINTS =====
-@app.post("/api/upload")
-async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
-    try:
-        global rag_instance
-        
-        if rag_instance is None:
-            return JSONResponse(content={"success": False, "error": "RAG not ready"})
-        
-        session_id = get_next_session_id()
-        session_dir = SESSIONS_DIR / session_id
-        session_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Create unique doc_id from filename (remove extension)
-        doc_id = Path(file.filename).stem
-        doc_upload_dir = session_dir / "documents" / doc_id
-        doc_upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Save PDF
-        pdf_path = doc_upload_dir / file.filename
-        with open(pdf_path, 'wb') as f:
-            f.write(await file.read())
-        
-        # Save metadata
-        save_session_metadata(session_id, {
-            "session_id": session_id,
-            "filename": file.filename,
-            "upload_time": datetime.now().isoformat(),
-            "status": "ingesting"
-        })
-        
-        session_status[session_id] = {
-            "status": "ingesting",
-            "progress": "Processing...",
-            "selected_doc": doc_id
-        }
-        
-        # Background ingest - PASS doc_id
-        if background_tasks:
-            background_tasks.add_task(ingest_pdf_async, session_id, str(pdf_path), file.filename, doc_id)
-        
-        return JSONResponse(content={
-            "success": True,
-            "session_id": session_id,
-            "doc_id": doc_id,
-            "filename": file.filename
-        })
-    
-    except Exception as e:
-        print(f"[!] Upload error: {e}")
-        return JSONResponse(content={"success": False, "error": str(e)})
+# ===== ENDPOINTS SETUP =====
 
-@app.get("/api/documents/{session_id}")
-async def get_documents(session_id: str):
-    """Get list of documents in a session"""
-    try:
-        session_dir = SESSIONS_DIR / session_id
-        docs_file = session_dir / "documents.json"
-        
-        if not docs_file.exists():
-            return JSONResponse(content={"success": True, "documents": []})
-        
-        with open(docs_file) as f:
-            docs = json.load(f)
-        
-        docs_list = list(docs.values())
-        
-        # Get selected_doc from session_status
-        selected_doc = session_status.get(session_id, {}).get("selected_doc", None)
-        
-        # CRITICAL: Ensure selected_doc points to a valid document
-        # If selected_doc is None or doesn't exist in current docs, use first doc
-        doc_ids = [doc["doc_id"] for doc in docs_list]
-        
-        if selected_doc not in doc_ids:
-            # selected_doc is stale/invalid - switch to first available doc
-            if docs_list:
-                selected_doc = docs_list[0]["doc_id"]
-                session_status[session_id]["selected_doc"] = selected_doc
-                print(f"[!] FIXED stale selected_doc - switched to: {selected_doc}", flush=True)
-            else:
-                selected_doc = None
-        
-        return JSONResponse(content={
-            "success": True,
-            "documents": docs_list,
-            "selected_doc": selected_doc
-        })
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+# Upload endpoint
+app.post("/api/upload")(
+    get_upload_handler(
+        lambda: rag_instance,
+        SESSIONS_DIR,
+        session_status,
+        get_next_session_id,
+        save_session_metadata,
+        ingest_pdf_async,
+        extract_text_from_pdf_with_ocr
+    )
+)
 
-@app.post("/api/select-document/{session_id}")
-async def select_document(session_id: str, doc_id: str):
-    """Switch to a different document in the session"""
-    try:
-        session_status[session_id]["selected_doc"] = doc_id
-        return JSONResponse(content={
-            "success": True,
-            "selected_doc": doc_id
-        })
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+# Document management endpoints
+app.get("/api/documents/{session_id}")(
+    get_documents_handler(SESSIONS_DIR, session_status, get_session_metadata)
+)
 
-@app.get("/api/sessions")
-async def list_sessions():
-    try:
-        SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
-        sessions = []
-        for sd in SESSIONS_DIR.iterdir():
-            if sd.is_dir():
-                m = get_session_metadata(sd.name)
-                if m:
-                    sessions.append(m)
-        
-        return JSONResponse(content={
-            "success": True,
-            "sessions": sorted(sessions, key=lambda x: x.get("upload_time", ""), reverse=True)
-        })
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+app.post("/api/select-document/{session_id}")(
+    get_select_document_handler(session_status)
+)
 
-@app.get("/api/status/{session_id}")
-async def get_status(session_id: str):
-    try:
-        if session_id not in session_status:
-            return JSONResponse(content={"success": False, "error": "Not found"})
-        
-        status = session_status[session_id]
-        return JSONResponse(content={
-            "success": True,
-            "session_id": session_id,
-            "status": status.get("status"),
-            "progress": status.get("progress"),
-            "summary": status.get("summary", "")
-        })
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+# Session management endpoints
+app.get("/api/sessions")(
+    get_list_sessions_handler(SESSIONS_DIR, get_session_metadata)
+)
 
-@app.get("/api/pdf/{session_id}/{doc_id}")
-async def get_pdf(session_id: str, doc_id: str):
-    try:
-        session_dir = SESSIONS_DIR / session_id
-        doc_dir = session_dir / "documents" / doc_id
-        pdfs = list(doc_dir.glob("*.pdf"))
-        if not pdfs:
-            return JSONResponse(content={"success": False, "error": "PDF not found"})
-        
-        return FileResponse(pdfs[0], media_type="application/pdf")
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+app.get("/api/status/{session_id}")(
+    get_status_handler(session_status)
+)
 
-# Fallback endpoint untuk kompatibilitas (ambil PDF pertama dari session)
-@app.get("/api/pdf/{session_id}")
-async def get_pdf_fallback(session_id: str):
-    try:
-        session_dir = SESSIONS_DIR / session_id
-        doc_dirs = [d for d in (session_dir / "documents").iterdir() if d.is_dir()]
-        if doc_dirs:
-            pdfs = list(doc_dirs[0].glob("*.pdf"))
-            if pdfs:
-                return FileResponse(pdfs[0], media_type="application/pdf")
-        return JSONResponse(content={"success": False, "error": "PDF not found"})
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
+# PDF endpoints
+app.get("/api/pdf/{session_id}/{doc_id}")(
+    get_pdf_handler(SESSIONS_DIR)
+)
 
-@app.delete("/api/delete-document/{session_id}/{doc_id}")
-async def delete_document(session_id: str, doc_id: str):
-    """Delete a document and ALL its associated data (file, chunks, embeddings, vectors)"""
-    try:
-        session_dir = SESSIONS_DIR / session_id
-        doc_dir = session_dir / "documents" / doc_id
-        
-        print(f"\n[*] Deleting document: {doc_id} from session {session_id}")
-        
-        # ===== 1. DELETE from LightRAG stores (chunks, embeddings, vectors) =====
-        # Load the global chunks file and remove chunks related to this doc
-        try:
-            chunks_file = Path(WORKING_DIR) / "kv_store_text_chunks.json"
-            if chunks_file.exists():
-                with open(chunks_file, 'r', encoding='utf-8', errors='ignore') as f:
-                    chunks_data = json.load(f)
-                
-                # Get doc_id from documents.json to match full_doc_id
-                session_dir = SESSIONS_DIR / session_id
-                doc_metadata_file = session_dir / "documents.json"
-                doc_full_id = None
-                
-                if doc_metadata_file.exists():
-                    with open(doc_metadata_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        docs_meta = json.load(f)
-                        if doc_id in docs_meta:
-                            # Try to get full_doc_id if stored, otherwise will use doc_id
-                            doc_full_id = docs_meta[doc_id].get('full_doc_id', None)
-                
-                # Filter chunks - remove by BOTH markers:
-                # 1. [DOC_ID:xxx] marker in content
-                # 2. full_doc_id field match
-                doc_id_marker = f"[DOC_ID:{doc_id}]"
-                chunks_to_keep = {}
-                deleted_count = 0
-                
-                for chunk_id, chunk_content in chunks_data.items():
-                    should_delete = False
-                    
-                    if isinstance(chunk_content, dict):
-                        # Check marker in content
-                        if 'content' in chunk_content:
-                            content = chunk_content['content']
-                            if doc_id_marker in content:
-                                should_delete = True
-                        
-                        # Check full_doc_id field
-                        chunk_full_id = chunk_content.get('full_doc_id', None)
-                        if chunk_full_id and doc_full_id and chunk_full_id == doc_full_id:
-                            should_delete = True
-                    
-                    if not should_delete:
-                        chunks_to_keep[chunk_id] = chunk_content
-                    else:
-                        deleted_count += 1
-                
-                # Write back filtered chunks
-                with open(chunks_file, 'w', encoding='utf-8') as f:
-                    json.dump(chunks_to_keep, f, ensure_ascii=False, indent=2)
-                
-                print(f"    [✓] Deleted {deleted_count} chunks from global store")
-        except Exception as e:
-            print(f"    [!] Error cleaning chunks store: {e}")
-        
-        # Also clean up VDB files (embeddings + entities) if they exist
-        # These contain references to chunks with doc_id_marker
-        try:
-            vdb_files = [
-                Path(WORKING_DIR) / "vdb_chunks.json",
-                Path(WORKING_DIR) / "vdb_entities.json",
-                Path(WORKING_DIR) / "vdb_relationships.json"
-            ]
-            
-            doc_id_marker = f"[DOC_ID:{doc_id}]"
-            
-            for vdb_file in vdb_files:
-                if not vdb_file.exists():
-                    continue
-                    
-                try:
-                    with open(vdb_file, 'r', encoding='utf-8', errors='ignore') as f:
-                        vdb_data = json.load(f)
-                    
-                    # Filter out entries related to this document
-                    if isinstance(vdb_data, dict):
-                        filtered_data = {}
-                        deleted = 0
-                        
-                        for key, value in vdb_data.items():
-                            # Check if entry contains doc_id_marker
-                            entry_str = json.dumps(value)
-                            if doc_id_marker not in entry_str:
-                                filtered_data[key] = value
-                            else:
-                                deleted += 1
-                        
-                        if deleted > 0:
-                            with open(vdb_file, 'w', encoding='utf-8') as f:
-                                json.dump(filtered_data, f, ensure_ascii=False, indent=2)
-                            print(f"    [✓] Cleaned {vdb_file.name} (removed {deleted} entries)")
-                except Exception as e:
-                    print(f"    [!] Error cleaning {vdb_file.name}: {e}")
-        except Exception as e:
-            print(f"    [!] Error in VDB cleanup: {e}")
-        
-        # ===== 2. DELETE document directory (PDF + local chunks copy) =====
-        if doc_dir.exists():
-            shutil.rmtree(doc_dir, ignore_errors=True)
-            print(f"    [✓] Deleted document directory")
-        
-        # ===== 3. UPDATE documents.json =====
-        docs_file = session_dir / "documents.json"
-        docs = {}  # Initialize empty dict
-        if docs_file.exists():
-            with open(docs_file, 'r', encoding='utf-8', errors='ignore') as f:
-                docs = json.load(f)
-            
-            if doc_id in docs:
-                del docs[doc_id]
-                # Write back updated docs
-                with open(docs_file, 'w', encoding='utf-8') as f:
-                    json.dump(docs, f, ensure_ascii=False, indent=2)
-                print(f"    [✓] Removed from documents.json")
-        
-        # ===== 4. UPDATE session status =====
-        if session_id in session_status:
-            if session_status[session_id].get("selected_doc") == doc_id:
-                # Find another document to select
-                remaining_docs = list(docs.keys())
-                if remaining_docs:
-                    session_status[session_id]["selected_doc"] = remaining_docs[0]
-                else:
-                    session_status[session_id]["selected_doc"] = None
-        
-        # ===== 5. CHECK if session is EMPTY - if so, DELETE entire session folder =====
-        if len(docs) == 0:
-            # No documents left in this session - delete the entire session
-            if session_dir.exists():
-                shutil.rmtree(session_dir, ignore_errors=True)
-                print(f"    [✓] Session folder deleted (no documents remaining)")
-            
-            # Remove from session_status
-            if session_id in session_status:
-                del session_status[session_id]
-        
-        print(f"[✓] Fully deleted document: {doc_id} (file + chunks + embeddings)\n")
-        return JSONResponse(content={"success": True, "message": "Document and all data deleted successfully"})
-    
-    except Exception as e:
-        print(f"[!] Delete error: {e}")
-        import traceback
-        traceback.print_exc()
-        return JSONResponse(content={"success": False, "error": str(e)})
+app.get("/api/pdf/{session_id}")(
+    get_pdf_fallback_handler(SESSIONS_DIR)
+)
 
-def cleanup_llm_response(text: str) -> str:
-    """Clean up LLM response - remove markdown artifacts and format nicely"""
-    import re
-    
-    if not text:
-        return text
-    
-    # Remove excessive asterisks and markdown formatting
-    text = re.sub(r'\*{2,}', '', text)  # Remove ** markers
-    text = re.sub(r'_{2,}', '', text)   # Remove __ markers
-    text = re.sub(r'`+', '', text)      # Remove backticks
-    
-    # Clean up quotes and special formatting
-    text = text.replace('""', '"').replace("''", "'")
-    text = re.sub(r'"(\w+)":', r'\1:', text)  # Remove quotes around keys
-    text = re.sub(r"'(\w+)':", r'\1:', text)
-    
-    # Remove JSON-like artifacts: **"key"**: -> key:
-    text = re.sub(r'\*\*"([^"]+)"\*\*:\s*', r'\1: ', text)
-    text = re.sub(r'\*\*([^*]+)\*\*:\s*', r'\1: ', text)
-    
-    # Clean up list markers - normalize to clean format
-    # Convert various markers to consistent format
-    lines = text.split('\n')
-    cleaned_lines = []
-    
-    for line in lines:
-        stripped = line.strip()
-        
-        # Skip empty lines (but we'll add them back for spacing)
-        if not stripped:
-            cleaned_lines.append('')
-            continue
-        
-        # Fix numbered items with various formats
-        # "1. text" -> "1. text"
-        # "1) text" -> "1. text"  
-        # "1: text" -> "1. text"
-        stripped = re.sub(r'^(\d+)[):](\s+)', r'\1. \2', stripped)
-        
-        # Fix lettered items
-        # "a) text" -> "• text"
-        # "a. text" -> "• text"
-        stripped = re.sub(r'^([a-z])[):](\s+)', r'• \2', stripped)
-        
-        # Remove excessive hyphens/dashes at start (keep only one)
-        while stripped.startswith('--'):
-            stripped = stripped[1:]
-        
-        # Convert multiple markers to single bullet
-        if stripped.startswith('- -'):
-            stripped = '• ' + stripped[3:].lstrip()
-        elif stripped.startswith('- '):
-            stripped = '• ' + stripped[2:]
-        elif stripped.startswith('• '):
-            pass  # Keep as is
-        
-        cleaned_lines.append(stripped)
-    
-    # Join lines, but add spacing between logical sections
-    text = '\n'.join(cleaned_lines)
-    
-    # Add paragraph breaks before numbered sections
-    text = re.sub(r'\n(\d+\.)', r'\n\n\1', text)
-    
-    # Remove excessive newlines
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
-    return text.strip()
+# Delete endpoints
+app.delete("/api/delete-document/{session_id}/{doc_id}")(
+    get_delete_document_handler(
+        SESSIONS_DIR,
+        Path(WORKING_DIR),
+        session_status,
+        delete_document_service
+    )
+)
 
-def format_section_response(context: str, section_name: str = "") -> str:
-    """
-    Format section-based response (Menimbang, Mengingat, Menetapkan) for better readability
-    
-    Args:
-        context: Raw text from chunks
-        section_name: Name of section (e.g., "Menimbang", "Mengingat") for header
-    """
-    import re
-    
-    if not context:
-        return context
-    
-    # Remove OCR artifacts and fix spacing
-    text = context.strip()
-    
-    # Fix common OCR spacing issues where words are concatenated
-    # Pattern: lowercase followed by uppercase without space (e.g., "kalurahanbagian" -> "kalurahan bagian")
-    text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
-    
-    # Fix multiple spaces (keep tables intact with 3+ spaces)
-    # Only replace 2-space sequences, keep 3+
-    text = re.sub(r'(?<!\s) {2}(?!\s)', ' ', text)
-    
-    # Add line breaks for better readability:
-    # Break after "UU" followed by number (legislation references)
-    text = re.sub(r'(UU\s+No\.\s+\d+[^\n]*?)(\s+(?:UU|PP|Peraturan))', r'\1\n\n\2', text)
-    
-    # Break after periods followed by capital letters (sentence breaks)
-    text = re.sub(r'(\.\s+)([A-Z])', r'\1\n', text)
-    
-    # Break after numbered items
-    text = re.sub(r'(\d+\.\s+[^\n]+?)(\s+\d+\.)', r'\1\n\2', text)
-    
-    # Add header if section name provided
-    if section_name:
-        text = f"**{section_name}:**\n\n{text}"
-    
-    # Clean up excessive whitespace
-    text = re.sub(r'\n\n\n+', '\n\n', text)
-    
-    return text.strip()
+# Query endpoint
+app.post("/api/query")(
+    get_query_handler(
+        SESSIONS_DIR,
+        Path(WORKING_DIR),
+        session_status,
+        search_chunks_from_session,
+        search_chunks_strict,
+        process_query,
+        cleanup_llm_response,
+        format_section_response,
+        format_table_response,
+        llm_model_func_openrouter,
+        TABLE_PROCESSOR
+    )
+)
 
-async def search_chunks_from_session(session_id: str, doc_id: str, query: str):
-    """Search chunks using lenient algorithm from search_logic.py"""
-    try:
-        # Call the optimized search function from search_logic
-        best_chunks = await search_chunks_strict(
-            query=query,
-            session_id=session_id,
-            doc_id=doc_id,
-            SESSIONS_DIR=SESSIONS_DIR,
-            WORKING_DIR=WORKING_DIR
-        )
-        
-        if not best_chunks:
-            print(f"[!] No chunks found for query: {query[:50]}", flush=True)
-            return []
-        
-        # Combine chunks with newline separator
-        combined = "\n".join(best_chunks)
-        
-        # Clean up OCR artifacts and extra whitespace
-        import re as regex_module
-        
-        # Remove page markers
-        combined = regex_module.sub(r'=== Page \d+ ===', '', combined, flags=regex_module.IGNORECASE)
-        combined = regex_module.sub(r'===\s*', '', combined)
-        
-        # Remove multiple spaces (but keep intentional spacing in tables)
-        combined = regex_module.sub(r' {3,}', '  ', combined)  # Triple+ -> double space
-        
-        # Remove multiple newlines
-        combined = regex_module.sub(r'\n\n\n+', '\n\n', combined)
-        
-        # Remove strange unicode characters and control chars
-        combined = ''.join(c for c in combined if ord(c) >= 32 or c in '\n\t')
-        
-        # Fix common OCR artifacts
-        combined = regex_module.sub(r'([^\w])\|\|([^\w])', r'\1|\2', combined)  # Fix || artifacts
-        
-        # Clean up extra spaces at line start/end
-        lines = combined.split('\n')
-        lines = [line.strip() for line in lines]
-        combined = '\n'.join(lines)
-        
-        combined = combined.strip()
-        
-        # Limit context length - INCREASED for better coverage
-        # For section/table queries: up to 25000 chars (full section content)
-        # For general queries: 8000 chars (enough for summary, not overwhelming)
-        if any(w in query.lower() for w in ['menimbang', 'mengingat', 'menetapkan', 'tabel', 'daftar']):
-            max_context_len = 25000  # More for section/table queries - FULL content
-        else:
-            max_context_len = 8000  # Reduced for general queries to avoid garbage
-        
-        if len(combined) > max_context_len:
-            combined = combined[:max_context_len]
-            print(f"[*] Context truncated to {max_context_len} chars")
-        
-        print(f"[*] Found {len(best_chunks)} chunks, context: {len(combined)} chars", flush=True)
-        return [{'content': combined}]
-    
-    except Exception as e:
-        print(f"[!] Search error: {e}")
-        import traceback
-        traceback.print_exc()
-        return []
+# Session deletion endpoint
+app.delete("/api/sessions/{session_id}")(
+    get_delete_session_handler(
+        SESSIONS_DIR,
+        Path(WORKING_DIR),
+        session_status,
+        delete_session_service
+    )
+)
 
-def parse_and_format_pipe_table(context: str, question: str = "") -> str:
-    """
-    Extract and beautifully format tables from context
-    Supports multiple separate tables
-    
-    Args:
-        context: Text containing tables
-        question: User's question (used to extract filter keywords dynamically)
-    """
-    lines = context.split('\n')
-    
-    # Find all table blocks (continuous lines with |)
-    table_blocks = []
-    current_block = []
-    
-    for line in lines:
-        if '|' in line and line.strip():
-            current_block.append(line)
-        elif current_block:
-            # End of current table block
-            if len(current_block) >= 2:
-                table_blocks.append(current_block)
-            current_block = []
-    
-    # Don't forget last block
-    if current_block and len(current_block) >= 2:
-        table_blocks.append(current_block)
-    
-    if not table_blocks:
-        return None
-    
-    # Format each table separately
-    results = []
-    for block in table_blocks:
-        result = format_pipe_table_html(block, question=question)
-        if result:
-            results.append(result)
-    
-    if not results:
-        return None
-    
-    # Return all tables separated by divider
-    return '\n\n---\n\n'.join(results)
-
-def format_pipe_table_html(pipe_lines, question: str = ""):
-    """Format pipe-delimited lines into markdown table - single table only
-    
-    Args:
-        pipe_lines: Lines containing pipe-delimited table
-        question: User's question (used to extract filter keywords dynamically)
-    """
-    # Extract cells from pipe lines
-    all_cells = []
-    for line in pipe_lines:
-        # Remove leading/trailing pipes and split
-        line = line.strip('| ')
-        cells = [cell.strip() for cell in line.split('|')]
-        cells = [c for c in cells if c]  # Remove empty cells
-        if cells:
-            all_cells.append(cells)
-    
-    if len(all_cells) < 2:
-        return None
-    
-    # First row = headers
-    headers = all_cells[0]
-    rows = all_cells[1:]
-    
-    if not headers or not rows:
-        return None
-    
-    # Extract filter keywords from USER QUESTION dynamically (NOT hardcoded)
-    # This way, different PDFs with different table types can be handled
-    query_keywords = extract_query_keywords(question)
-    
-    return build_markdown_table(headers, rows, query_keywords=query_keywords)
-
-def extract_query_keywords(question: str) -> list:
-    """
-    Extract meaningful keywords from user's question to filter table rows.
-    
-    ZERO HARDCODING approach: 
-    - Extract ALL non-question words from the question
-    - Let build_markdown_table() decide if filtering is useful
-    - If no keywords match document data, show all rows (lenient fallback)
-    
-    This works with ANY PDF structure - completely data-driven.
-    
-    Examples:
-        "tabel apa saja" -> extract [] (no keywords, show all rows)
-        "tabel nama peserta" -> extract ['nama', 'peserta'] (filter if document has these)
-        "apa isi tabel" -> extract [] (no keywords, show all rows)
-    
-    NOT hardcoded - each document defines its own structure!
-    """
-    if not question:
-        return []
-    
-    # Super minimal stop words - only common question/filler words
-    # ZERO domain-specific hardcoding (no 'posyandu', 'kader', 'IKN', etc)
-    minimal_stop_words = {
-        'tabel', 'isi', 'jelaskan', 'apa', 'apa itu', 'daftar',
-        'dan', 'atau', 'ini', 'itu', 'dari', 'untuk', 'apa saja',
-        'berapa', 'mana', 'yang', 'ada', 'ada apa'
-    }
-    
-    # Split and clean
-    words = question.lower().split()
-    keywords = []
-    
-    for word in words:
-        # Remove all punctuation
-        word = word.strip('.,!?;:\'"()[]{}').strip()
-        
-        # Keep only: non-empty, not in stop_words, length > 2
-        if len(word) > 2 and word not in minimal_stop_words:
-            keywords.append(word)
-    
-    # Remove duplicates preserving order
-    seen = set()
-    unique = []
-    for kw in keywords:
-        if kw not in seen:
-            seen.add(kw)
-            unique.append(kw)
-    
-    return unique
-
-def build_markdown_table(headers, rows, query_keywords=None):
-    """Build markdown table from headers and rows, optionally filter by query"""
-    if not headers or not rows:
-        return None
-    
-    # Standardize columns
-    num_cols = len(headers)
-    headers = headers[:num_cols]
-    rows = [[row[i] if i < len(row) else '' for i in range(num_cols)] for row in rows]
-    
-    # Smart filtering: ONLY filter if keywords exist AND match well
-    # If no match found (0% hit rate), show all rows (don't be too restrictive)
-    if query_keywords:
-        filtered_rows = []
-        for row in rows:
-            # Check if any keyword matches in any cell of the row
-            row_text = ' '.join([str(cell).lower() for cell in row])
-            if any(kw.lower() in row_text for kw in query_keywords):
-                filtered_rows.append(row)
-        
-        # IMPORTANT: Only apply filter if we got meaningful results
-        # If match rate is very low (< 20%), don't filter at all - show everything
-        # This prevents case where user asks "posyandu" but document only has "kader"
-        if filtered_rows:  # Even 1 match is ok, don't enforce percentage threshold
-            rows = filtered_rows
-    
-    # Calculate column widths
-    col_widths = []
-    for col_idx in range(num_cols):
-        max_width = max(len(headers[col_idx]), 12)
-        for row in rows:
-            max_width = max(max_width, len(str(row[col_idx])[:30]))
-        col_widths.append(min(max_width, 30))
-    
-    # Build markdown table
-    result = "📋 **TABEL**\n\n"
-    
-    # Header row
-    header_row = "| " + " | ".join(h[:col_widths[i]].ljust(col_widths[i]) for i, h in enumerate(headers)) + " |"
-    result += header_row + "\n"
-    
-    # Separator
-    sep_row = "|" + "|".join(["-" * (col_widths[i] + 2) for i in range(num_cols)]) + "|"
-    result += sep_row + "\n"
-    
-    # Data rows
-    for row in rows[:50]:
-        row_str = "| " + " | ".join(str(row[i])[:col_widths[i]].ljust(col_widths[i]) for i in range(num_cols)) + " |"
-        result += row_str + "\n"
-    
-    if len(rows) > 50:
-        result += f"\n*(... dan {len(rows) - 50} baris lagi)*"
-    
-    return result
-
-def format_table_response(context: str, question: str):
-    """
-    Try to format table response if context contains structured table data
-    Returns formatted answer or None if no table found
-    """
-    if not TABLE_PROCESSOR:
-        return None
-    
-    # More comprehensive keyword detection
-    table_keywords = ['tabel', 'daftar', 'table', 'kategori', 'kelompok', 'peringkat', 'isi tabel', 'jelaskan tabel']
-    if not any(kw in question.lower() for kw in table_keywords):
-        return None
-    
-    try:
-        # Try new beautified pipe table parser first (faster, better output)
-        # Pass question to enable dynamic keyword extraction for table filtering
-        table_result = parse_and_format_pipe_table(context, question=question)
-        if table_result:
-            return table_result
-        
-        # Fallback: try TABLE_PROCESSOR detection
-        tables = TABLE_PROCESSOR.detect_table_region(context)
-        
-        if not tables:
-            return None
-        
-        # If TABLE_PROCESSOR found tables, parse them
-        start_pos, end_pos, table_type = tables[0]
-        table_lines = context[start_pos:end_pos].split('\n')
-        
-        table_data = None
-        
-        # Try to parse based on type
-        if table_type == "box":
-            table_data = TABLE_PROCESSOR.parse_box_table(table_lines)
-        elif table_type == "pipe":
-            table_data = TABLE_PROCESSOR.parse_pipe_table(table_lines)
-        else:
-            table_data = TABLE_PROCESSOR.parse_text_table(table_lines)
-        
-        if table_data:
-            # Format table for display - clean and readable
-            headers = table_data.get('headers', [])
-            rows = table_data.get('rows', [])
-            
-            if not headers or not rows:
-                return None
-            
-            # Calculate column widths
-            col_widths = []
-            for col_idx in range(len(headers)):
-                max_width = max(len(headers[col_idx]), 15)
-                for row in rows:
-                    if col_idx < len(row):
-                        max_width = max(max_width, len(str(row[col_idx])[:40]))
-                col_widths.append(min(max_width, 40))
-            
-            # Build markdown table
-            result = f"📋 **TABEL** ({table_type}):\n\n"
-            
-            # Header row
-            header_row = "| " + " | ".join(h[:col_widths[i]].ljust(col_widths[i]) for i, h in enumerate(headers)) + " |"
-            result += header_row + "\n"
-            
-            # Separator row
-            sep_row = "|" + "|".join(["-" * (col_widths[i] + 2) for i in range(len(headers))]) + "|"
-            result += sep_row + "\n"
-            
-            # Data rows (limit to 100)
-            for idx, row in enumerate(rows[:100], 1):
-                row_str = "| " + " | ".join(str(row[i])[:col_widths[i]].ljust(col_widths[i]) if i < len(row) else "".ljust(col_widths[i]) for i in range(len(headers))) + " |"
-                result += row_str + "\n"
-            
-            if len(rows) > 100:
-                result += f"\n*(... dan {len(rows) - 100} baris lagi)*"
-            
-            return result
-        
-        return None
-    
-    except Exception as e:
-        print(f"[!] Table formatting error: {e}")
-        return None
-
-@app.post("/api/query")
-async def query_pdf(request: QueryRequest):
-    try:
-        session_id = request.session_id
-        doc_id = request.doc_id
-        question = request.question
-        
-        if not question or not question.strip():
-            return JSONResponse(content={"success": False, "error": "Empty question"})
-        
-        if not doc_id:
-            return JSONResponse(content={"success": False, "error": "No document selected"})
-        
-        if session_id not in session_status or session_status[session_id].get("status") != "ready":
-            return JSONResponse(content={"success": False, "error": "Session not ready"})
-        
-        print(f"[*] Query (doc={doc_id}): {question[:50]}...", flush=True)
-        
-        try:
-            t_total_start = time.time()
-            
-            # Search chunks from SELECTED DOCUMENT ONLY
-            chunks = await search_chunks_from_session(session_id, doc_id, question)
-            
-            if not chunks:
-                answer = "Konten dokumen tidak mencukupi untuk menjawab pertanyaan ini. Mohon tanyakan dengan kata kunci lain."
-                print(f"[!] No chunks found for doc {doc_id}")
-                return JSONResponse(content={"success": True, "answer": answer})
-            
-            context = chunks[0]['content']
-            
-            # Detect query type
-            question_lower = question.lower()
-            is_summary_query = any(kw in question_lower for kw in ['jelaskan isi dokumen', 'ringkas', 'summary', 'overview', 'ringkasan', 'apa isi dokumen', 'tentang dokumen'])
-            is_table_query = any(kw in question_lower for kw in ['tabel', 'daftar', 'table', 'kategori', 'kelompok', 'peringkat', 'isi tabel', 'jelaskan tabel'])
-            is_section_query = any(kw in question_lower for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'])
-            
-            # Try table formatting first if it's a table question
-            table_answer = format_table_response(context, question)
-            if table_answer:
-                answer = table_answer
-            # For section queries: use special formatting (not LLM, just text formatting)
-            elif is_section_query:
-                section_name = next((kw.capitalize() for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'] if kw in question_lower), "")
-                answer = format_section_response(context, section_name)
-            # For short context: return directly (but still clean)
-            elif len(context) < 600:
-                answer = cleanup_llm_response(context)
-            # Check for greeting-only questions
-            elif question.lower().strip() in ['hai', 'halo', 'hi', 'hello', 'assalamu\'alaikum', 'pagi', 'siang', 'sore', 'malam']:
-                answer = "Halo! Ada yang bisa saya bantu tentang dokumen ini?"
-            else:
-                # For summary queries: use special prompt
-                if is_summary_query:
-                    system_prompt = """Kamu adalah assistant yang membuat RINGKASAN DOKUMEN yang singkat dan padat.
-
-ATURAN RINGKASAN:
-- Buat SUMMARY SINGKAT: max 5-7 poin utama SAJA
-- Jelaskan tujuan/maksud utama dokumen dalam 1-2 kalimat
-- Highlight bagian kunci: Menimbang, Mengingat, Memutuskan (jika ada)
-- Gunakan bullet points (•) untuk clarity
-- Format: • Poin 1\n• Poin 2\n• dll
-- JANGAN copy-paste seluruh isi dokumen
-- Target: 200-300 kata maksimal
-- TIDAK BOLEH ada markdown atau simbol aneh"""
-
-                    answer_prompt = f"""Pertanyaan: {question}
-
-Konteks dari dokumen:
-{context}
-
-RINGKASAN SINGKAT (max 5-7 poin, 200-300 kata):"""
-                
-                # For table queries: use structured format
-                elif is_table_query:
-                    system_prompt = """Kamu adalah assistant yang menampilkan DATA TABEL dari dokumen dengan format yang RAPI DAN MUDAH DIBACA.
-
-ATURAN TABEL:
-- Format output HANYA dengan MARKDOWN TABLE (| header | header |)
-- JANGAN gunakan bullet points atau penjelasan panjang
-- Setiap baris tabel: | data1 | data2 | data3 |
-- Gunakan PERSIS data dari dokumen, JANGAN mengarang
-- Jika ada kolom: tampilkan SEMUA kolom yang ada
-- Header adalah baris pertama, diikuti separator: |---|---|---|
-- Data rows: setiap baris menjadi row di table
-- HANYA output TABLE, tidak perlu intro atau kesimpulan"""
-
-                    answer_prompt = f"""Pertanyaan: {question}
-
-DATA TABEL dari dokumen:
-{context}
-
-INSTRUKSI: Format sebagai MARKDOWN TABLE dengan pipe (|). Output HANYA table, tidak perlu penjelasan. Header | separator | rows."""
-                
-                else:
-                    # Regular question
-                    system_prompt = """Kamu adalah assistant yang FOKUS menjawab pertanyaan user dari dokumen.
-
-ATURAN PEMFORMATAN - SANGAT PENTING:
-- Gunakan line break yang cukup untuk readability
-- Untuk list: gunakan format "• item" atau "1. item" dengan line break setelah setiap item
-- Pisahkan poin-poin utama dengan line break kosong
-- Jangan gunakan markdown seperti ** atau __
-- Jangan pernah output JSON atau struktur data kompleks
-- Gunakan spacing untuk visual hierarchy yang jelas
-
-ATURAN KONTEN:
-1. Jawab TEPAT apa yang ditanya, JANGAN tambah informasi
-2. Jika ditanya tabel: LIST item dengan format "Nama | Kategori | Nilai" atau "• item"
-3. Jika ditanya bagian spesifik (Menimbang/Mengingat): LIST SEMUA POIN dengan nomor atau bullet
-4. Jika ditanya point spesifik (point 2, point a): HANYA jawab itu saja
-5. Jawab dari dokumen SAJA, jangan tambah pengetahuan umum
-6. JANGAN tambah kesimpulan atau summary tidak diminta"""
-
-                    answer_prompt = f"""Pertanyaan: {question}
-
-Konteks dari dokumen:
-{context}
-
-Jawaban (format dengan jelas, gunakan line break untuk setiap poin):"""
-                
-                t_llm_start = time.time()
-                answer = await asyncio.wait_for(
-                    llm_model_func_openrouter(answer_prompt, sys_prompt=system_prompt),
-                    timeout=60.0
-                )
-                t_llm = time.time() - t_llm_start
-                print(f"[OK] LLM: {t_llm:.2f}s")
-                
-                # Clean up response formatting
-                answer = cleanup_llm_response(answer)
-            
-            t_total = time.time() - t_total_start
-            
-            print(f"[OK] Query done: {len(answer)} chars in {t_total:.2f}s", flush=True)
-            
-            return JSONResponse(content={
-                "success": True,
-                "answer": answer,
-                "timing": {"total_ms": int(t_total * 1000)}
-            })
-        
-        except Exception as e:
-            print(f"[!] Query error: {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-            return JSONResponse(content={"success": False, "error": str(e)})
-    
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
-
-@app.delete("/api/sessions/{session_id}")
-async def delete_session(session_id: str):
-    try:
-        session_dir = SESSIONS_DIR / session_id
-        
-        if session_id in session_status:
-            del session_status[session_id]
-        
-        if session_dir.exists():
-            shutil.rmtree(session_dir)
-        
-        # Also clean up VDB files when deleting entire session
-        # This prevents NanoVectorDB corruption on next startup
-        try:
-            vdb_files = [
-                Path(WORKING_DIR) / "vdb_chunks.json",
-                Path(WORKING_DIR) / "vdb_entities.json",
-                Path(WORKING_DIR) / "vdb_relationships.json"
-            ]
-            
-            for vdb_file in vdb_files:
-                if vdb_file.exists():
-                    vdb_file.unlink()
-                    print(f"[✓] Deleted {vdb_file.name}")
-            
-            print(f"[✓] Session {session_id} deleted with full VDB cleanup")
-        except Exception as e:
-            print(f"[!] Warning: Could not clean VDB files: {e}")
-        
-        return JSONResponse(content={"success": True})
-    
-    except Exception as e:
-        return JSONResponse(content={"success": False, "error": str(e)})
-
+# UI endpoints
 @app.get("/")
-async def serve_ui():
+async def home():
+    """Serve home page"""
+    return FileResponse(Path(__file__).parent / "ui" / "home.html")
+
+@app.get("/chat")
+async def chat():
+    """Serve chat page"""
     return FileResponse(Path(__file__).parent / "ui" / "index.html")
 
+# Static files
 ui_dir = Path(__file__).parent / "ui"
 if ui_dir.exists():
     app.mount("/static", StaticFiles(directory=str(ui_dir)), name="static")
