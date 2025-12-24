@@ -1141,8 +1141,11 @@ function addMessage(text, sender, save = true) {
         // Text has table - use it as-is (already formatted)
         contentHtml = formattedText;
     } else {
-        // Regular text - escape it
-        contentHtml = escapeHtml(formattedText);
+        // Regular text - escape it and convert line breaks to <br>
+        contentHtml = escapeHtml(formattedText)
+            .split('\n')
+            .map(line => line.trim() ? line : '<br>')  // Keep empty lines as <br>
+            .join('<br>');
     }
     
     msg.innerHTML = `

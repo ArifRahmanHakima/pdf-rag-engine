@@ -51,14 +51,28 @@ async def ingest_pdf_async(
         
         if docstring_api_key and "docstring" in doc_id:
             # Use DocString extractor with API key
+            if not docstring_api_key:
+                raise ValueError("DOCSTRING_API_KEY not configured in .env")
+            
             # Note: extract_text_func may return a coroutine (async function)
-            result = extract_text_func(pdf_path, docstring_api_key)
-            # Check if result is a coroutine and await it
-            import inspect
-            if inspect.iscoroutine(result):
-                text = await result
-            else:
-                text = result
+            try:
+                result = extract_text_func(pdf_path, docstring_api_key)
+                # Check if result is a coroutine and await it
+                import inspect
+                if inspect.iscoroutine(result):
+                    text = await result
+                else:
+                    text = result
+                
+                # Verify extraction succeeded
+                if not text or not text.strip():
+                    raise ValueError("DocString extraction returned empty content")
+                    
+            except Exception as extract_error:
+                print(f"\n[!] DocString extraction failed: {extract_error}", flush=True)
+                session_status[session_id]["status"] = "error"
+                session_status[session_id]["error"] = f"DocString extraction failed: {str(extract_error)}"
+                return False
             
             # Clean DocString markdown output (remove HTML tags, noise, etc)
             text = clean_docstring_markdown(text)

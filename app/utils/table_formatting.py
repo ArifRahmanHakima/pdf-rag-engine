@@ -149,6 +149,7 @@ def format_section_response(context: str, section_name: str = "") -> str:
     - Highlight point markers (a, b, c, 1, 2, 3, etc) with spacing
     - Fix OCR spacing issues
     - Add proper section headers
+    - Break long lines and sentences for clarity
     
     Args:
         context: Raw text from chunks
@@ -166,28 +167,53 @@ def format_section_response(context: str, section_name: str = "") -> str:
     # Pattern: lowercase followed by uppercase without space
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     
-    # ===== ADD LINE BREAKS FOR READABILITY =====
+    # ===== SMART LINE BREAKING FOR POINTS =====
+    # Split by point patterns first to properly structure the content
+    lines = []
+    current_section = []
     
-    # Pattern 1: Break BEFORE point markers (a., b., 1., 2., etc)
-    # This creates spacing between points for better readability
-    text = re.sub(r'\n?(\s+)([a-z]\.)', r'\n\n\2', text, flags=re.IGNORECASE)  # Letter points
-    text = re.sub(r'\n?(\s+)(\d{1,2}\.)', r'\n\n\2', text)  # Number points
+    # Split text into lines for processing
+    raw_lines = text.split('\n')
     
-    # Pattern 2: Break after periods followed by capital letters (sentence breaks)
+    for line in raw_lines:
+        # Check if line starts with a point marker (a., b., 1., 2., a), b), etc)
+        point_match = re.match(r'^(\s*)([a-z]|\d+)[\.\)\:](.*)$', line, re.IGNORECASE)
+        
+        if point_match:
+            # This is a point start - save previous section and start new one
+            if current_section:
+                lines.append('\n'.join(current_section).strip())
+            
+            indent = point_match.group(1)
+            point_char = point_match.group(2)
+            content = point_match.group(3).strip()
+            
+            # Start new point with proper formatting
+            current_section = [f"{indent}{point_char}. {content}"]
+        else:
+            # Continuation of current point
+            if line.strip():
+                current_section.append(line)
+            elif current_section:
+                # Empty line - preserve it but don't create separate section yet
+                current_section.append('')
+    
+    # Add last section
+    if current_section:
+        lines.append('\n'.join(current_section).strip())
+    
+    # Join sections with double line breaks
+    if lines:
+        text = '\n\n'.join(lines)
+    
+    # ===== ADDITIONAL LINE BREAK FIXES =====
+    # Pattern: Break after periods followed by capital letters (sentence breaks)
     # But NOT for "UU No." or similar abbreviations
     text = re.sub(r'(?<![A-Z])(\.)\s+(?=[A-Z][a-z])', r'\1\n', text)
     
-    # Pattern 3: Break after numbered legislation references (UU, PP, Peraturan)
+    # Pattern: Break after numbered legislation references (UU, PP, Peraturan)
     # "UU No. 5 Tahun 2000 tentang ... " -> add break before next reference
     text = re.sub(r'((?:UU|PP|Peraturan)\s+No\.\s+\d+[^\n]*?)(\s+(?:UU|PP|Peraturan))', r'\1\n\n\2', text)
-    
-    # Pattern 4: Break AFTER content, BEFORE "a)", "b)", "1)", etc patterns
-    text = re.sub(r'([\.)\s])\s*([a-z]\))\s', r'\1\n\n\2 ', text, flags=re.IGNORECASE)
-    
-    # ===== ADD SPACING AFTER COMMAS AND SEMICOLONS =====
-    # This helps with readability of complex sentences
-    # text = re.sub(r',([^\s])', r', \1', text)  # Add space after comma if missing
-    # text = re.sub(r';([^\s])', r'; \1', text)  # Add space after semicolon if missing
     
     # ===== CLEAN UP EXCESSIVE WHITESPACE =====
     # Remove multiple spaces (but keep table spacing intact with 3+ spaces)
@@ -197,13 +223,13 @@ def format_section_response(context: str, section_name: str = "") -> str:
     text = re.sub(r'\n\n\n+', '\n\n', text)
     
     # Remove trailing spaces on lines
-    lines = text.split('\n')
-    lines = [line.rstrip() for line in lines]
-    text = '\n'.join(lines)
+    lines_final = text.split('\n')
+    lines_final = [line.rstrip() for line in lines_final]
+    text = '\n'.join(lines_final)
     
     # ===== ADD HEADER IF SECTION NAME PROVIDED =====
     if section_name and section_name.lower() not in ['', 'none']:
-        text = f"**{section_name}:**\n\n{text}"
+        text = f"{section_name}:\n\n{text}"
     
     return text.strip()
 

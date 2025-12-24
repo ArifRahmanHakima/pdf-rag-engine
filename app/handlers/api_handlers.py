@@ -176,13 +176,19 @@ def get_status_handler(session_status: dict):
                 return JSONResponse(content={"success": False, "error": "Not found"})
             
             status = session_status[session_id]
-            return JSONResponse(content={
+            response = {
                 "success": True,
                 "session_id": session_id,
                 "status": status.get("status"),
                 "progress": status.get("progress"),
                 "summary": status.get("summary", "")
-            })
+            }
+            
+            # Include error message if status is error
+            if status.get("status") == "error":
+                response["error"] = status.get("error", "Unknown error")
+            
+            return JSONResponse(content=response)
         except Exception as e:
             return JSONResponse(content={"success": False, "error": str(e)})
     

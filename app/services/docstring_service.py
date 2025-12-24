@@ -33,50 +33,82 @@ async def extract_with_docstring_sync(
         Exception: Jika API request gagal
     """
     
-    async with httpx.AsyncClient(timeout=60) as client:
-        with open(file_path, 'rb') as f:
-            files = {
-                'file': (Path(file_path).name, f, 'application/pdf')
-            }
-            data = {
-                'output_format': output_format
-            }
-            headers = {
-                'Authorization': f'Bearer {api_key}'
-            }
-            
-            print(f"[*] DocString sync extraction (≤5 pages): {Path(file_path).name}", flush=True)
-            
-            response = await client.post(
-                f"{DOCSTRING_BASE_URL}/extract/sync",
-                files=files,
-                data=data,
-                headers=headers
-            )
-            
-            if response.status_code == 200:
-                result = response.json()
-                # Extract content from nested structure: result.result.markdown.content
-                content = result.get('result', {}).get('markdown', {}).get('content', '')
-                # Fallback to other possible keys
-                if not content:
-                    content = result.get('markdown', {}).get('content', '') or result.get('content', '') or ''
-                if not content:
-                    print(f"[!] Empty response from DocString: {result}", flush=True)
-                    raise Exception(f"DocString API returned empty content")
-                print(f"[✓] DocString sync extraction complete ({len(content)} chars)", flush=True)
-                return content
-            elif response.status_code == 400:
-                # File exceeds size limit - fallback to async extraction
-                error_msg = response.json().get('detail', response.text)
-                print(f"[!] Sync extraction failed (400): {error_msg}", flush=True)
-                print(f"[*] Falling back to async extraction...", flush=True)
-                # Return async extraction coroutine instead
-                return await extract_with_docstring_async(file_path, api_key)
-            else:
-                error_msg = response.text
-                print(f"[!] DocString API error: {response.status_code} - {error_msg}", flush=True)
-                raise Exception(f"DocString API error: {response.status_code} - {error_msg}")
+    if not api_key:
+        raise ValueError("DocString API key is not configured. Please set DOCSTRING_API_KEY in .env")
+    
+    file_path_obj = Path(file_path)
+    if not file_path_obj.exists():
+        raise FileNotFoundError(f"PDF file not found: {file_path}")
+    
+    # Check file size (API limit is usually 50MB)
+    file_size_mb = file_path_obj.stat().st_size / (1024 * 1024)
+    print(f"[*] DocString sync extraction: {file_path_obj.name} ({file_size_mb:.2f} MB)", flush=True)
+    
+    try:
+        async with httpx.AsyncClient(timeout=90) as client:
+            with open(file_path, 'rb') as f:
+                files = {
+                    'file': (file_path_obj.name, f, 'application/pdf')
+                }
+                data = {
+                    'output_format': output_format
+                }
+                headers = {
+                    'Authorization': f'Bearer {api_key}'
+                }
+                
+                print(f"[*] Calling DocString API (sync endpoint)...", flush=True)
+                
+                response = await client.post(
+                    f"{DOCSTRING_BASE_URL}/extract/sync",
+                    files=files,
+                    data=data,
+                    headers=headers
+                )
+                
+                print(f"[*] DocString API response: {response.status_code}", flush=True)
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    # Extract content from nested structure: result.result.markdown.content
+                    content = result.get('result', {}).get('markdown', {}).get('content', '')
+                    # Fallback to other possible keys
+                    if not content:
+                        content = result.get('markdown', {}).get('content', '') or result.get('content', '') or ''
+                    if not content:
+                        print(f"[!] Empty response from DocString: {result}", flush=True)
+                        raise Exception(f"DocString API returned empty content. Response: {result}")
+                    print(f"[✓] DocString sync extraction complete ({len(content)} chars)", flush=True)
+                    return content
+                elif response.status_code == 400:
+                    # File exceeds size limit - fallback to async extraction
+                    error_msg = response.json().get('detail', response.text)
+                    print(f"[!] Sync extraction failed (400 Bad Request): {error_msg}", flush=True)
+                    print(f"[*] Falling back to async extraction...", flush=True)
+                    # Return async extraction coroutine instead
+                    return await extract_with_docstring_async(file_path, api_key)
+                elif response.status_code == 401:
+                    error_msg = "Invalid or expired API key"
+                    print(f"[!] DocString API error (401 Unauthorized): {error_msg}", flush=True)
+                    raise Exception(f"DocString API authentication failed. Please check DOCSTRING_API_KEY")
+                elif response.status_code == 403:
+                    error_msg = "API key doesn't have permission"
+                    print(f"[!] DocString API error (403 Forbidden): {error_msg}", flush=True)
+                    raise Exception(f"DocString API permission denied. Please check your plan limits")
+                else:
+                    error_msg = response.text
+                    print(f"[!] DocString API error: {response.status_code} - {error_msg}", flush=True)
+                    raise Exception(f"DocString API error: {response.status_code} - {error_msg}")
+    
+    except httpx.TimeoutException as te:
+        print(f"[!] DocString API timeout: {te}", flush=True)
+        raise Exception(f"DocString API request timed out after 90 seconds. File may be too large.")
+    except httpx.RequestError as re:
+        print(f"[!] DocString API connection error: {re}", flush=True)
+        raise Exception(f"Failed to connect to DocString API: {str(re)}")
+    except Exception as e:
+        print(f"[!] DocString extraction error: {e}", flush=True)
+        raise
 
 
 async def extract_with_docstring_async(

@@ -121,11 +121,20 @@ def get_upload_handler_docstring(
             })
         
         except Exception as e:
-            print(f"[!] DocString Upload error: {e}", flush=True)
+            error_msg = str(e)
+            print(f"[!] DocString Upload error: {error_msg}", flush=True)
             import traceback
             traceback.print_exc()
+            
+            # Update session status with error message
+            if session_id in locals():
+                session_status[session_id] = {
+                    "status": "error",
+                    "error": error_msg
+                }
+            
             return JSONResponse(
-                content={"success": False, "error": str(e)},
+                content={"success": False, "error": error_msg},
                 status_code=500
             )
     
