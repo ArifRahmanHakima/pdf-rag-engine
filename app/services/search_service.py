@@ -8,7 +8,7 @@ from pathlib import Path
 
 async def search_chunks_from_session(session_id: str, doc_id: str, query: str, sessions_dir: Path, working_dir: Path, search_func):
     """
-    Search chunks using lenient algorithm
+    Search chunks using strict algorithm
     
     Args:
         session_id: Session identifier
@@ -19,7 +19,7 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str, s
         search_func: Search function from search_logic.py (search_chunks_strict)
     """
     try:
-        # Call the optimized search function from search_logic
+        # Call the search function
         best_chunks = await search_func(
             query=query,
             session_id=session_id,
@@ -59,13 +59,8 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str, s
         
         combined = combined.strip()
         
-        # Limit context length - INCREASED for better coverage
-        # For section/table queries: up to 25000 chars (full section content)
-        # For general queries: 8000 chars (enough for summary)
-        if any(w in query.lower() for w in ['menimbang', 'mengingat', 'menetapkan', 'tabel', 'daftar']):
-            max_context_len = 25000  # More for section/table queries
-        else:
-            max_context_len = 8000  # Reduced for general queries
+        # Limit context length
+        max_context_len = 8000
         
         if len(combined) > max_context_len:
             combined = combined[:max_context_len]
@@ -79,3 +74,4 @@ async def search_chunks_from_session(session_id: str, doc_id: str, query: str, s
         import traceback
         traceback.print_exc()
         return []
+

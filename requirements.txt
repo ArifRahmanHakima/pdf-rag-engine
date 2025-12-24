@@ -19,5 +19,6 @@ tqdm>=4.66.0
 # LLM Integration
 openai>=1.3.0
 
-# Deep Learning (required by easyocr and sentence-transformers)
-torch>=2.0.0
+# HTTP Client (for DocString API)
+httpx>=0.24.0
+

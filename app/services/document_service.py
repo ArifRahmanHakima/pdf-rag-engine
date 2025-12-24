@@ -5,10 +5,12 @@ Document processing service - handles PDF ingestion and RAG integration
 import json
 import time
 import shutil
+import asyncio
 from pathlib import Path
 from datetime import datetime
 
-from app.utils.text_processing import split_text_into_chunks
+from app.utils.text_processing import split_text_into_chunks, clean_docstring_markdown
+from app.utils import save_session_metadata
 
 
 async def ingest_pdf_async(
@@ -20,7 +22,8 @@ async def ingest_pdf_async(
     sessions_dir: Path,
     working_dir: Path,
     session_status: dict,
-    extract_text_func
+    extract_text_func,
+    docstring_api_key: str = None
 ):
     """
     Ingest PDF into RAG system with document isolation
@@ -34,16 +37,44 @@ async def ingest_pdf_async(
         sessions_dir: Sessions directory path
         working_dir: Working directory path
         session_status: Session status dictionary (to update)
-        extract_text_func: Function to extract text from PDF (from main_openrouter.py)
+        extract_text_func: Function to extract text from PDF
+        docstring_api_key: Optional API key if using DocString extraction
     """
     try:
         print(f"\n[*] Processing {filename}", flush=True)
         file_start = time.time()
         
-        # Extract text with OCR
-        print(f"    Extracting text with OCR...", end='', flush=True)
+        # Extract text - support both OCR and DocString extractors
+        extractor_type = "DocString" if docstring_api_key and "docstring" in doc_id else "OCR"
+        print(f"    Extracting text with {extractor_type}...", end='', flush=True)
         ocr_start = time.time()
-        text = extract_text_func(pdf_path, use_ocr=True)
+        
+        if docstring_api_key and "docstring" in doc_id:
+            # Use DocString extractor with API key
+            # Note: extract_text_func may return a coroutine (async function)
+            result = extract_text_func(pdf_path, docstring_api_key)
+            # Check if result is a coroutine and await it
+            import inspect
+            if inspect.iscoroutine(result):
+                text = await result
+            else:
+                text = result
+            
+            # Clean DocString markdown output (remove HTML tags, noise, etc)
+            text = clean_docstring_markdown(text)
+            
+            # DEBUG: Save cleaned output to file for inspection
+            session_dir = sessions_dir / session_id
+            doc_chunks_dir = session_dir / "documents" / doc_id
+            doc_chunks_dir.mkdir(parents=True, exist_ok=True)
+            debug_output_file = doc_chunks_dir / "docstring_cleaned_output.md"
+            with open(debug_output_file, 'w', encoding='utf-8') as f:
+                f.write(text)
+            print(f"\n[DEBUG] DocString cleaned output saved to {debug_output_file}", flush=True)
+        else:
+            # Use existing OCR extractor
+            text = extract_text_func(pdf_path, use_ocr=True)
+        
         ocr_time = time.time() - ocr_start
         print(f" [{ocr_time:.2f}s]", flush=True)
         
@@ -57,14 +88,25 @@ async def ingest_pdf_async(
         chunks = split_text_into_chunks(text)
         print(f" ({len(chunks)} chunks)", flush=True)
         
-        # Insert into RAG with document tracking
+        # DEBUG: Show first chunk to inspect structure
+        if chunks:
+            print(f"[DEBUG] First chunk ({len(chunks[0])} chars):\n{chunks[0][:500]}...\n", flush=True)
+        
+        # Insert into RAG with document tracking (PARALLEL/CONCURRENT)
         print(f"    Inserting into RAG (knowledge graph)...", end='', flush=True)
         rag_start = time.time()
         
+        # Create tasks for parallel insertion
+        insert_tasks = []
         for chunk_text in chunks:
             # Add document metadata to text for tracking
             chunk_with_doc_id = f"[DOC_ID:{doc_id}]\n{chunk_text}"
-            await rag_instance.ainsert(chunk_with_doc_id)
+            # Create coroutine (don't await yet - collect all tasks)
+            insert_tasks.append(rag_instance.ainsert(chunk_with_doc_id))
+        
+        # Execute all inserts concurrently (parallel)
+        if insert_tasks:
+            await asyncio.gather(*insert_tasks)
         
         rag_time = time.time() - rag_start
         print(f" [{rag_time:.2f}s]", flush=True)
@@ -128,6 +170,17 @@ async def ingest_pdf_async(
             session_status[session_id]["status"] = "ready"
             if "selected_doc" not in session_status[session_id]:
                 session_status[session_id]["selected_doc"] = doc_id
+        
+        # Save updated metadata to file (important: persists status change to disk)
+        session_dir = sessions_dir / session_id
+        metadata_file = session_dir / "metadata.json"
+        if metadata_file.exists():
+            with open(metadata_file, encoding='utf-8') as f:
+                metadata = json.load(f)
+            metadata["status"] = "ready"  # Update status to ready
+            metadata["ingested_at"] = datetime.now().isoformat()
+            save_session_metadata(session_id, metadata, sessions_dir)
+            print(f"[✓] Metadata saved with status=ready", flush=True)
         
         print(f"[✓] Ingested in {file_time:.2f}s total (OCR: {ocr_time:.2f}s, RAG: {rag_time:.2f}s)\n", flush=True)
         return True

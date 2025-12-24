@@ -9,13 +9,95 @@ def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200
     """
     Split text into overlapping chunks for better RAG processing
     CRITICAL: Keep tables intact - don't split tables across chunks
-    OPTIMIZED: Fast-path for small texts, simple split logic
+    OPTIMIZED: Markdown-aware for DocString output, section-based for OCR output
     """
     # Fast path: if text is small, don't chunk
     if len(text) < chunk_size:
         return [text]
     
-    # Try simple split by section headers first (fastest)
+    # Check if text is markdown (contains markdown headers/formatting)
+    is_markdown = bool(re.search(r'^#+\s+|\n#+\s+', text, re.MULTILINE))
+    
+    if is_markdown:
+        # Markdown-aware chunking for DocString output
+        return _split_markdown_chunks(text, chunk_size)
+    else:
+        # Section-based chunking for OCR output
+        return _split_section_chunks(text, chunk_size)
+
+
+def _split_markdown_chunks(text: str, chunk_size: int = 1500) -> list:
+    """
+    Split markdown text preserving structure
+    Groups by headers and points (a, b, c, 1, 2, 3, etc)
+    Never splits tables mid-way
+    Handles legal documents with point-based structure
+    """
+    chunks = []
+    current_chunk = []
+    current_len = 0
+    
+    lines = text.split('\n')
+    i = 0
+    
+    while i < len(lines):
+        line = lines[i]
+        
+        # Check if this is a markdown header (# ## ### etc)
+        is_header = re.match(r'^#+\s+', line)
+        
+        # Check if this is a point/number start (a., b., c., 1., 2., etc)
+        # Pattern: optional whitespace, then letter/number dot, then space
+        is_point_start = re.match(r'^\s*([a-z]|\d+)\.\s+', line, re.IGNORECASE)
+        
+        # Check if this is a table line
+        is_table_line = line.strip().startswith('|')
+        
+        line_len = len(line) + 1
+        
+        # Decision logic: when to start new chunk
+        should_split = False
+        
+        if current_len + line_len > chunk_size and current_chunk:
+            # Size exceeded
+            if is_header or is_point_start:
+                # Good place to split
+                should_split = True
+            elif current_len > chunk_size * 1.2:
+                # Force split if way over size
+                should_split = True
+        
+        if should_split:
+            chunks.append('\n'.join(current_chunk))
+            current_chunk = [line]
+            current_len = line_len
+        else:
+            # Add line to current chunk
+            current_chunk.append(line)
+            current_len += line_len
+            
+            # Special handling for tables: include all table rows together
+            if is_table_line and i + 1 < len(lines) and lines[i + 1].strip().startswith('|'):
+                i += 1
+                next_line = lines[i]
+                current_chunk.append(next_line)
+                current_len += len(next_line) + 1
+        
+        i += 1
+    
+    # Add remaining chunk
+    if current_chunk:
+        chunks.append('\n'.join(current_chunk))
+    
+    return chunks if chunks else [text]
+
+
+def _split_section_chunks(text: str, chunk_size: int = 1500) -> list:
+    """
+    Split by document sections for OCR output
+    Simple strategy: split by section headers only (MENIMBANG, MENGINGAT, etc)
+    """
+    # Try simple split by section headers
     sections = re.split(
         r'(?:^|\n)(MENIMBANG|MENGINGAT|MENETAPKAN|MEMUTUSKAN|DAFTAR|LAMPIRAN|BAB)',
         text,
@@ -35,11 +117,10 @@ def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200
         if len(chunks) > 1:
             return chunks
     
-    # Fallback: split by paragraphs (simple, fast)
+    # Fallback: split by paragraphs
     paragraphs = [p.strip() for p in text.split('\n\n') if p.strip()]
     
     if len(paragraphs) <= 2:
-        # Few paragraphs, don't chunk
         return [text]
     
     # Group paragraphs into chunks
@@ -50,19 +131,19 @@ def split_text_into_chunks(text: str, chunk_size: int = 1500, overlap: int = 200
     for para in paragraphs:
         para_len = len(para)
         
-        # If adding this para exceeds limit, flush current chunk
         if current_len + para_len > chunk_size and current:
             chunks.append('\n\n'.join(current))
             current = [para]
             current_len = para_len
         else:
             current.append(para)
-            current_len += para_len + 2  # +2 for \n\n separator
+            current_len += para_len + 2
     
     if current:
         chunks.append('\n\n'.join(current))
     
     return chunks if chunks else [text]
+
 
 
 def cleanup_llm_response(text: str) -> str:
@@ -184,3 +265,44 @@ def extract_query_keywords(question: str) -> list:
             unique.append(kw)
     
     return unique
+
+def clean_docstring_markdown(text: str) -> str:
+    """
+    Clean DocString markdown output by removing HTML tags and noise
+    
+    Removes:
+    - <img>...</img> tags (images and icons)
+    - <signature>...</signature> tags
+    - <stamp>...</stamp> tags
+    - HTML entities like &lt; &gt; &amp;
+    - Multiple consecutive blank lines
+    
+    Args:
+        text: Raw markdown from DocString API
+        
+    Returns:
+        Cleaned markdown suitable for chunking and RAG indexing
+    """
+    # Remove HTML-like tags that DocString API includes
+    text = re.sub(r'<img[^>]*>.*?</img>', '', text, flags=re.DOTALL)  # Remove <img>...</img>
+    text = re.sub(r'<signature[^>]*>.*?</signature>', '', text, flags=re.DOTALL)  # Remove signatures
+    text = re.sub(r'<stamp[^>]*>.*?</stamp>', '', text, flags=re.DOTALL)  # Remove stamps
+    text = re.sub(r'<[^>]+>', '', text)  # Remove any other HTML-like tags
+    
+    # Decode HTML entities
+    text = text.replace('&lt;', '<')
+    text = text.replace('&gt;', '>')
+    text = text.replace('&amp;', '&')
+    text = text.replace('&quot;', '"')
+    text = text.replace('&apos;', "'")
+    
+    # Clean up lines with only page markers
+    text = re.sub(r'## Page \d+\s*\n+', '\n\n', text)
+    
+    # Remove multiple consecutive blank lines (keep max 2)
+    text = re.sub(r'\n\s*\n\s*\n+', '\n\n', text)
+    
+    # Strip leading/trailing whitespace
+    text = text.strip()
+    
+    return text

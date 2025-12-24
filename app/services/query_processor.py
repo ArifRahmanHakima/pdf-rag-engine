@@ -30,10 +30,25 @@ async def process_query(
     if table_answer:
         return table_answer
     
+    # Detect if this is a point-specific query (e.g., "apa isi point c bagian menimbang?")
+    import re
+    point_patterns = [
+        r'(?:poin|point|butir|ayat|pasal)\s+(?:ke\s+)?(?:bagian\s+)?([a-z]|\d+)',
+        r'(?:poin|point|butir|ayat|pasal)\s*[:\.]\s*([a-z]|\d+)',
+        r'bagian\s+(?:poin|point)\s+(?:ke\s+)?([a-z]|\d+)',
+        r'(?:ke\s+)?(\d+)\s+(?:bagian|dalam)',
+    ]
+    is_point_query = any(re.search(pattern, question_lower) for pattern in point_patterns)
+    
     # For section queries: use special formatting (not LLM, just text formatting)
     if is_section_query:
         section_name = next((kw.capitalize() for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'] if kw in question_lower), "")
         return format_section_func(context, section_name)
+    
+    # For point queries: also use formatting (not LLM) since we extracted just that point
+    if is_point_query:
+        section_name = next((kw.capitalize() for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'] if kw in question_lower), "")
+        return format_section_func(context, section_name if section_name else "")
     
     # For short context: return directly (but still clean)
     if len(context) < 600:

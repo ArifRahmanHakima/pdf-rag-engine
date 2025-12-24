@@ -17,9 +17,14 @@
         <div class="sidebar sidebar-left">
             <div class="sidebar-header">
                 <h2>📚 Documents</h2>
-                <button class="btn-upload" id="uploadBtn">
-                    <span>+ Upload PDF</span>
-                </button>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn-upload" id="uploadBtn" style="flex: 1;">
+                        <span>+ Upload PDF</span>
+                    </button>
+                    <button class="btn-upload" id="uploadDocstringBtn" style="flex: 1; background-color: #6366f1;" title="Upload dengan DocString API">
+                        <span>🤖 DocString</span>
+                    </button>
+                </div>
                 <input type="file" id="fileInput" accept=".pdf" style="display: none;">
             </div>
 
@@ -196,6 +201,9 @@
         </div>
     </div>
 
-    <script src="/static/js/app.js?v=3"></script>
+    <!-- Toast Notification Container (for loading status) -->
+    <div id="toastContainer" style="position: fixed; top: 20px; right: 20px; z-index: 10000;"></div>
+
+    <script src="/static/js/app.js"></script>
 </body>
 </html>

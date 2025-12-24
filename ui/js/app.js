@@ -7,6 +7,8 @@ let currentSessionId = null;
 let currentDocId = null;  // Track selected document
 let isLoading = false;
 let documents = [];  // List of documents in current session
+let lastUploadButtonClicked = 'ocr';  // Track which upload button was clicked (ocr or docstring)
+let isUploading = false;  // Track if upload is in progress
 
 // ===== Storage Helpers =====
 function saveCurrentSelection(sessionId, docId) {
@@ -23,7 +25,8 @@ function getLastSelection() {
     } : null;
 }
 
-// ===== DOM Elements =====
+
+// Track which upload button was clicked
 let uploadBtn, fileInputModal, uploadModal, uploadArea, uploadProgress, uploadStatus, modalClose;
 let sessionsList, currentPdfName, deleteBtn, pdfViewer;
 let chatMessages, chatInput, sendBtn, statusIndicator;
@@ -73,14 +76,36 @@ document.addEventListener('DOMContentLoaded', () => {
     if (uploadBtn) {
         uploadBtn.addEventListener('click', () => {
             console.log('[JS] Upload button clicked!');
+            lastUploadButtonClicked = 'ocr';
             openUploadModal();
         });
         console.log('[JS] Upload button listener attached');
     } else {
         console.error('[JS] uploadBtn not found!');
     }
+
+    // ===== DOCSTRING UPLOAD BUTTON (NEW) =====
+    const uploadDocstringBtn = document.getElementById('uploadDocstringBtn');
+    if (uploadDocstringBtn) {
+        uploadDocstringBtn.addEventListener('click', () => {
+            console.log('[JS] DocString upload button clicked!');
+            lastUploadButtonClicked = 'docstring';
+            openUploadModal();
+        });
+        console.log('[JS] DocString upload button listener attached');
+    } else {
+        console.warn('[JS] uploadDocstringBtn not found (DocString API may not be configured)');
+    }
+
     if (uploadArea) uploadArea.addEventListener('click', () => fileInputModal.click());
-    if (fileInputModal) fileInputModal.addEventListener('change', (e) => handleFileSelect(e.target.files[0]));
+    if (fileInputModal) fileInputModal.addEventListener('change', (e) => {
+        // Route to correct handler based on which button was clicked
+        if (lastUploadButtonClicked === 'docstring') {
+            handleFileSelectDocstring(e.target.files[0]);
+        } else {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
     if (modalClose) modalClose.addEventListener('click', closeUploadModal);
     if (uploadModal) uploadModal.addEventListener('click', (e) => {
         if (e.target === uploadModal) closeUploadModal();
@@ -100,7 +125,12 @@ document.addEventListener('DOMContentLoaded', () => {
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            handleFileSelect(e.dataTransfer.files[0]);
+            // Route to correct handler based on which button was last clicked
+            if (lastUploadButtonClicked === 'docstring') {
+                handleFileSelectDocstring(e.dataTransfer.files[0]);
+            } else {
+                handleFileSelect(e.dataTransfer.files[0]);
+            }
         });
     }
 
@@ -125,6 +155,11 @@ function openUploadModal() {
 function closeUploadModal() {
     uploadModal.classList.remove('show');
     fileInputModal.value = '';
+    
+    // Jika upload masih berjalan, show loading toast
+    if (isUploading) {
+        showLoadingToast();
+    }
 }
 
 async function handleFileSelect(file) {
@@ -169,16 +204,24 @@ async function handleFileSelect(file) {
     }
     
     // Calculate estimate time
-    // Scanned PDF (OCR): ~5-6 sec/page (Tesseract + RAG + chunking)
-    // Digital PDF: ~2 sec/page (RAG + chunking)
     let estimatedSeconds;
-    if (pageCount === '?') {
-        estimatedSeconds = 90;  // Conservative estimate
-    } else if (pdfType.includes('Scanned')) {
-        estimatedSeconds = Math.ceil(pageCount * 5.5) + 5; // 5.5 sec/page + 5 sec overhead for chunking
+    
+    if (lastUploadButtonClicked === 'docstring') {
+        // DocString API timing is HIGHLY VARIABLE - cannot be predicted accurately
+        // Actual data shows: 5 pages=82s, 4 pages=30s, 12 pages=126s
+        // Formulas don't work - use safe conservative estimate for all DocString uploads
+        estimatedSeconds = 90; // Safe default: 1.5 minutes
     } else {
-        estimatedSeconds = Math.ceil(pageCount * 2) + 3; // 2 sec/page + 3 sec overhead
+        // OCR timing (Tesseract + RAG + chunking)
+        if (pageCount === '?') {
+            estimatedSeconds = 60;  // Conservative estimate for unknown
+        } else if (pdfType.includes('Scanned')) {
+            estimatedSeconds = Math.ceil(pageCount * 5.5) + 5; // 5.5 sec/page + 5 sec overhead
+        } else {
+            estimatedSeconds = Math.ceil(pageCount * 2) + 3; // 2 sec/page + 3 sec overhead
+        }
     }
+    
     const estimatedTime = estimatedSeconds < 60 
         ? `~${estimatedSeconds} detik` 
         : `~${Math.ceil(estimatedSeconds / 60)} menit`;
@@ -204,6 +247,9 @@ async function handleFileSelect(file) {
     
     uploadStatus.textContent = 'Uploading PDF...';
 
+    // Set upload flag
+    isUploading = true;
+
     try {
         const formData = new FormData();
         formData.append('file', file);
@@ -225,6 +271,7 @@ async function handleFileSelect(file) {
             console.log(`[handleFileSelect] Cleared old chat history: ${chatKey}`);
             
             uploadStatus.textContent = 'Processing PDF...';
+            updateToastProgress(60, 'Processing with OCR...');
 
             // Wait untuk ingest complete
             const result = await waitForSessionReady(sessionId);
@@ -234,26 +281,170 @@ async function handleFileSelect(file) {
             if (result && result.success) {
                 progressFill.style.width = '100%';
                 uploadStatus.textContent = 'Done! ✓';
+                updateToastProgress(100, 'Upload complete!');
+                isUploading = false;
                 
                 // Close modal dan load session
                 setTimeout(() => {
                     closeUploadModal();
+                    removeToastAfterSuccess();
                     loadSessions();
                     selectSession(sessionId, result.summary);
                 }, 500);
             } else {
                 alert('Processing timeout (3min). PDF may still be processing.\nYou can try refreshing or selecting the PDF from the list.');
+                isUploading = false;
                 closeUploadModal();
+                removeToastAfterSuccess();
                 loadSessions();
             }
         } else {
             clearInterval(interval);
+            isUploading = false;
             alert('Upload failed: ' + (data.error || 'Unknown error'));
+            closeToast();
         }
     } catch (error) {
         clearInterval(interval);
+        isUploading = false;
         alert('Upload error: ' + error.message);
         console.error(error);
+        closeToast();
+    } finally {
+        progressFill.style.width = '0%';
+        uploadArea.style.display = 'block';
+        uploadProgress.style.display = 'none';
+    }
+}
+
+// ===== DOCSTRING FILE HANDLER (NEW) =====
+async function handleFileSelectDocstring(file) {
+    if (!file || file.type !== 'application/pdf') {
+        alert('Please select a valid PDF file');
+        return;
+    }
+
+    // Show progress
+    uploadArea.style.display = 'none';
+    uploadProgress.style.display = 'block';
+    
+    // Extract PDF metadata (same as existing)
+    const fileSize = file.size;
+    const fileName = file.name;
+    let pageCount = '?';
+    let pdfType = 'Unknown';
+    
+    try {
+        const arrayBuffer = await file.arrayBuffer();
+        const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+        pageCount = pdf.numPages;
+        
+        let hasText = false;
+        try {
+            const page = await pdf.getPage(1);
+            const textContent = await page.getTextContent();
+            hasText = textContent.items.length > 0;
+        } catch (e) {
+            hasText = false;
+        }
+        
+        pdfType = hasText ? '📋 Digital PDF' : '📸 Scanned PDF';
+    } catch (error) {
+        console.error('Error reading PDF:', error);
+        pageCount = '?';
+        pdfType = 'PDF (unknown type)';
+    }
+    
+    // Estimate time - DocString API timing is HIGHLY VARIABLE and unpredictable
+    // Cannot use formula-based estimates due to inconsistent performance
+    // Use safe fixed estimate for all DocString uploads
+    let estimatedSeconds = 90; // Safe default: 1.5 minutes
+    
+    const estimatedTime = estimatedSeconds < 60 
+        ? `~${estimatedSeconds} detik` 
+        : `~${Math.ceil(estimatedSeconds / 60)} menit`;
+    
+    // Update upload info display
+    const uploadInfo = document.getElementById('uploadInfo');
+    if (uploadInfo) {
+        document.getElementById('infoFileName').textContent = fileName;
+        document.getElementById('infoPages').textContent = `${pageCount} halaman`;
+        document.getElementById('infoPdfType').textContent = pdfType;
+        document.getElementById('infoEstimate').textContent = estimatedTime;
+        uploadInfo.style.display = 'block';
+    }
+    
+    // Animate progress bar
+    const progressFill = document.querySelector('.progress-fill');
+    let progress = 0;
+    const interval = setInterval(() => {
+        progress += Math.random() * 30;
+        if (progress > 90) progress = 90;
+        progressFill.style.width = progress + '%';
+    }, 300);
+    
+    uploadStatus.textContent = 'Uploading dengan DocString...';
+
+    // Set upload flag
+    isUploading = true;
+
+    try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        // Upload to /api/upload-docstring (DocString endpoint)
+        const response = await fetch('/api/upload-docstring', {
+            method: 'POST',
+            body: formData
+        });
+
+        const data = await response.json();
+
+        if (data.success) {
+            const sessionId = data.session_id;
+            const docId = data.doc_id;
+            
+            const chatKey = `chat_${sessionId}_${docId}`;
+            localStorage.removeItem(chatKey);
+            
+            uploadStatus.textContent = 'Processing dengan DocString AI...';
+            updateToastProgress(60, 'Processing with DocString API...');
+
+            const result = await waitForSessionReady(sessionId);
+            
+            clearInterval(interval);
+            
+            if (result && result.success) {
+                progressFill.style.width = '100%';
+                uploadStatus.textContent = 'Done! ✓';
+                updateToastProgress(100, 'Upload complete!');
+                isUploading = false;
+                
+                setTimeout(() => {
+                    closeUploadModal();
+                    removeToastAfterSuccess();
+                    loadSessions();
+                    selectSession(sessionId, result.summary);
+                }, 500);
+            } else {
+                alert('Processing timeout (3min). PDF may still be processing.');
+                isUploading = false;
+                closeUploadModal();
+                removeToastAfterSuccess();
+                loadSessions();
+            }
+        } else {
+            clearInterval(interval);
+            isUploading = false;
+            alert('Upload failed: ' + (data.error || 'Unknown error'));
+            closeToast();
+        }
+    } catch (error) {
+        clearInterval(interval);
+        isUploading = false;
+        alert('Upload error: ' + error.message);
+        console.error(error);
+        closeToast();
     } finally {
         progressFill.style.width = '0%';
         uploadArea.style.display = 'block';
@@ -972,6 +1163,71 @@ function updateStatus(status) {
     statusIndicator.textContent = status;
     statusIndicator.style.background = status === 'ready' ? '#e8f5e9' : status === 'thinking' ? '#fff3e0' : '#ffebee';
     statusIndicator.style.color = status === 'ready' ? '#2e7d32' : status === 'thinking' ? '#e65100' : '#c62828';
+}
+
+// ===== Toast Notification Functions =====
+function showLoadingToast() {
+    const toastContainer = document.getElementById('toastContainer');
+    
+    // Hapus toast lama jika ada
+    const existingToast = document.getElementById('uploadToast');
+    if (existingToast) {
+        return; // Toast sudah ada, jangan buat yang baru
+    }
+    
+    const toast = document.createElement('div');
+    toast.id = 'uploadToast';
+    toast.className = 'toast-notification';
+    toast.innerHTML = `
+        <div class="toast-header">
+            <span class="toast-title">Uploading to RAG System</span>
+            <button class="toast-close" onclick="closeToast()">×</button>
+        </div>
+        <div class="toast-status">
+            <span class="toast-spinner"></span>
+            <span id="toastStatusText">Processing with ${lastUploadButtonClicked === 'docstring' ? 'DocString API' : 'OCR'}...</span>
+        </div>
+        <div class="toast-progress">
+            <div id="toastProgressBar" class="toast-progress-bar" style="width: 0%"></div>
+        </div>
+        <div id="toastPercent" class="toast-percent">0%</div>
+    `;
+    
+    toastContainer.appendChild(toast);
+    
+    // Trigger animation
+    setTimeout(() => {
+        toast.classList.add('show');
+    }, 10);
+}
+
+function updateToastProgress(percent, status) {
+    const progressBar = document.getElementById('toastProgressBar');
+    const percentText = document.getElementById('toastPercent');
+    const statusText = document.getElementById('toastStatusText');
+    
+    if (progressBar && percentText && statusText) {
+        progressBar.style.width = percent + '%';
+        percentText.textContent = percent + '%';
+        statusText.textContent = status;
+    }
+}
+
+function closeToast() {
+    const toast = document.getElementById('uploadToast');
+    if (toast) {
+        toast.classList.remove('show');
+        setTimeout(() => {
+            toast.remove();
+        }, 300);
+    }
+}
+
+function removeToastAfterSuccess() {
+    // Wait a bit before closing for user feedback
+    setTimeout(() => {
+        closeToast();
+    }, 2000);
 }
 
 // ===== Initialization =====

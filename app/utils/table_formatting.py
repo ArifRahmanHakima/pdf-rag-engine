@@ -142,7 +142,13 @@ def build_markdown_table(headers, rows, query_keywords=None):
 
 def format_section_response(context: str, section_name: str = "") -> str:
     """
-    Format section-based response (Menimbang, Mengingat, Menetapkan) for better readability
+    Format section-based response (Menimbang, Mengingat, Menetapkan, Point queries) for better readability
+    
+    Applies smart formatting:
+    - Add line breaks after periods (sentence breaks)
+    - Highlight point markers (a, b, c, 1, 2, 3, etc) with spacing
+    - Fix OCR spacing issues
+    - Add proper section headers
     
     Args:
         context: Raw text from chunks
@@ -153,33 +159,51 @@ def format_section_response(context: str, section_name: str = "") -> str:
     if not context:
         return context
     
-    # Remove OCR artifacts and fix spacing
     text = context.strip()
     
+    # ===== FIX SPACING ISSUES =====
     # Fix common OCR spacing issues where words are concatenated
-    # Pattern: lowercase followed by uppercase without space (e.g., "kalurahanbagian" -> "kalurahan bagian")
+    # Pattern: lowercase followed by uppercase without space
     text = re.sub(r'([a-z])([A-Z])', r'\1 \2', text)
     
-    # Fix multiple spaces (keep tables intact with 3+ spaces)
-    # Only replace 2-space sequences, keep 3+
-    text = re.sub(r'(?<!\s) {2}(?!\s)', ' ', text)
+    # ===== ADD LINE BREAKS FOR READABILITY =====
     
-    # Add line breaks for better readability:
-    # Break after "UU" followed by number (legislation references)
-    text = re.sub(r'(UU\s+No\.\s+\d+[^\n]*?)(\s+(?:UU|PP|Peraturan))', r'\1\n\n\2', text)
+    # Pattern 1: Break BEFORE point markers (a., b., 1., 2., etc)
+    # This creates spacing between points for better readability
+    text = re.sub(r'\n?(\s+)([a-z]\.)', r'\n\n\2', text, flags=re.IGNORECASE)  # Letter points
+    text = re.sub(r'\n?(\s+)(\d{1,2}\.)', r'\n\n\2', text)  # Number points
     
-    # Break after periods followed by capital letters (sentence breaks)
-    text = re.sub(r'(\.\s+)([A-Z])', r'\1\n', text)
+    # Pattern 2: Break after periods followed by capital letters (sentence breaks)
+    # But NOT for "UU No." or similar abbreviations
+    text = re.sub(r'(?<![A-Z])(\.)\s+(?=[A-Z][a-z])', r'\1\n', text)
     
-    # Break after numbered items
-    text = re.sub(r'(\d+\.\s+[^\n]+?)(\s+\d+\.)', r'\1\n\2', text)
+    # Pattern 3: Break after numbered legislation references (UU, PP, Peraturan)
+    # "UU No. 5 Tahun 2000 tentang ... " -> add break before next reference
+    text = re.sub(r'((?:UU|PP|Peraturan)\s+No\.\s+\d+[^\n]*?)(\s+(?:UU|PP|Peraturan))', r'\1\n\n\2', text)
     
-    # Add header if section name provided
-    if section_name:
-        text = f"**{section_name}:**\n\n{text}"
+    # Pattern 4: Break AFTER content, BEFORE "a)", "b)", "1)", etc patterns
+    text = re.sub(r'([\.)\s])\s*([a-z]\))\s', r'\1\n\n\2 ', text, flags=re.IGNORECASE)
     
-    # Clean up excessive whitespace
+    # ===== ADD SPACING AFTER COMMAS AND SEMICOLONS =====
+    # This helps with readability of complex sentences
+    # text = re.sub(r',([^\s])', r', \1', text)  # Add space after comma if missing
+    # text = re.sub(r';([^\s])', r'; \1', text)  # Add space after semicolon if missing
+    
+    # ===== CLEAN UP EXCESSIVE WHITESPACE =====
+    # Remove multiple spaces (but keep table spacing intact with 3+ spaces)
+    text = re.sub(r' {2}(?! )', ' ', text)  # Double space -> single (unless triple+)
+    
+    # Remove multiple newlines (keep max 2)
     text = re.sub(r'\n\n\n+', '\n\n', text)
+    
+    # Remove trailing spaces on lines
+    lines = text.split('\n')
+    lines = [line.rstrip() for line in lines]
+    text = '\n'.join(lines)
+    
+    # ===== ADD HEADER IF SECTION NAME PROVIDED =====
+    if section_name and section_name.lower() not in ['', 'none']:
+        text = f"**{section_name}:**\n\n{text}"
     
     return text.strip()
 

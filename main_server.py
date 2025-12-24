@@ -31,6 +31,7 @@ from app.services.llm_service import llm_model_func_openrouter
 from lightrag import LightRAG
 from app.services.search_logic import search_chunks_strict
 from main_openrouter import extract_text_from_pdf_with_ocr
+from app.services.docstring_service import extract_with_docstring_sync
 
 # Modular imports
 from app.utils import (
@@ -63,6 +64,7 @@ from app.handlers import (
     get_query_handler,
     get_delete_session_handler,
     get_ui_handler,
+    get_docstring_upload_handler,
 )
 
 # Optional table processor
@@ -195,6 +197,23 @@ app.post("/api/upload")(
         extract_text_from_pdf_with_ocr
     )
 )
+
+# DocString upload endpoint
+docstring_api_key = os.getenv("DOCSTRING_API_KEY")
+if docstring_api_key:
+    app.post("/api/upload-docstring")(
+        get_docstring_upload_handler(
+            lambda: rag_instance,
+            SESSIONS_DIR,
+            session_status,
+            get_next_session_id,
+            save_session_metadata,
+            ingest_pdf_async,
+            extract_with_docstring_sync,
+            docstring_api_key
+        )
+    )
+
 
 # Document management endpoints
 app.get("/api/documents/{session_id}")(

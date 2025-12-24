@@ -6,6 +6,95 @@ import json
 import os
 import time
 
+
+def _extract_point_content(chunk: str, point: str) -> str:
+    """
+    Extract ONLY the requested point from a chunk that contains multiple points.
+    
+    GENERIC for both letter points (a, b, c) and number points (1, 2, 3, etc)
+    
+    For point query "c", extract from "c. ..." to "d. ..." (or end of chunk)
+    For point query "5", extract from "5. ..." to "6. ..." (or end of chunk)
+    
+    Args:
+        chunk: Full chunk text containing multiple points
+        point: Requested point (single char like 'a', 'b', 'c' or digit string like '1', '2', '5')
+    
+    Returns:
+        Extracted content for that point only
+    """
+    lines = chunk.split('\n')
+    result_lines = []
+    capturing = False
+    found_start = False
+    
+    # Pattern to match point start: "a.", "b)", "1.", "5)", "(a)", "(5)", etc
+    # GENERIC: works for both letters and numbers (including multi-digit)
+    point_escaped = re.escape(point)
+    point_patterns = [
+        rf'^\s*{point_escaped}[\.\)\:]',      # "a." or "a)" or "a:" or "5." or "5)" at line start
+        rf'^\s*\({point_escaped}\)',           # "(a)" or "(5)" format
+    ]
+    
+    # Pattern for ANY point marker (to detect next point)
+    # Match: single letter (a-z) or 1-2 digit numbers (1-99), followed by . ) or :
+    next_point_pattern = r'^\s*([a-z]|\d{1,2})[\.\)\:]'  # Generic point marker
+    
+    # For number points, also prepare next number
+    if point.isdigit():
+        # point is numeric, so next point is next number
+        try:
+            next_num = str(int(point) + 1)
+            # More specific pattern for numeric: look for exact next number
+            next_num_pattern = rf'^\s*{re.escape(next_num)}[\.\)\:]'
+        except:
+            next_num_pattern = None
+    else:
+        # Letter points - use generic detection
+        next_num_pattern = None
+    
+    for i, line in enumerate(lines):
+        # Check if this line starts the requested point
+        matches_point = any(re.match(pattern, line, re.IGNORECASE) for pattern in point_patterns)
+        
+        if matches_point:
+            if not found_start:
+                # First time finding this point
+                found_start = True
+                capturing = True
+                print(f"[*] Extract: Found point '{point}' at line {i}: {line[:70]}...", flush=True)
+            result_lines.append(line)
+            continue
+        
+        # If we're capturing, check for next point (different point)
+        if capturing:
+            # For numeric points: check if this line is the next number
+            if next_num_pattern and re.match(next_num_pattern, line, re.IGNORECASE):
+                print(f"[*] Extract: Found next point (numeric) at line {i}, stopping", flush=True)
+                break
+            
+            # For letter or generic: check if any different point marker exists
+            match = re.match(next_point_pattern, line, re.IGNORECASE)
+            if match:
+                found_point = match.group(1).lower()
+                if found_point != point.lower():
+                    # Different point found - stop capturing here
+                    print(f"[*] Extract: Found different point '{found_point}' at line {i}, stopping", flush=True)
+                    break
+            
+            result_lines.append(line)
+    
+    if result_lines:
+        extracted = '\n'.join(result_lines).strip()
+        if len(extracted) > 30:  # Only return if meaningful
+            print(f"[*] Extract: Successfully extracted {len(extracted)} chars for point '{point}'", flush=True)
+            return extracted
+    
+    # Fallback: return original if extraction failed
+    print(f"[!] Extract: Failed to extract point '{point}', returning full chunk ({len(chunk)} chars)", flush=True)
+    return chunk
+
+
 async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSIONS_DIR, WORKING_DIR, embedding_func=None):
     """
     AGGRESSIVE SEARCH - Designed to retrieve relevant chunks from selected document
@@ -60,6 +149,22 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
         requested_section = None
         is_table_query = False
         table_keywords_in_query = []
+        requested_point = None  # NEW: Track requested point (a, b, c, 1, 2, 3, etc)
+        
+        # ========== NEW: DETECT REQUESTED POINT ==========
+        # Pattern: "poin b", "point 6", "butir a", "ayat 2", "bagian b", "point ke 5", etc
+        point_patterns = [
+            r'(?:poin|point|butir|ayat|pasal)\s+(?:ke\s+)?(?:bagian\s+)?([a-z]|\d+)',  # "point b", "point ke 5", "poin bagian b"
+            r'(?:poin|point|butir|ayat|pasal)\s*[:\.]\s*([a-z]|\d+)',  # "point: b", "poin. a"
+            r'bagian\s+(?:poin|point)\s+(?:ke\s+)?([a-z]|\d+)',  # "bagian point b", "bagian point ke 5"
+            r'(?:ke\s+)?(\d+)\s+(?:bagian|dalam)',  # "ke 5 bagian" or "5 dalam"
+        ]
+        for pattern in point_patterns:
+            match = re.search(pattern, query_lower)
+            if match:
+                requested_point = match.group(1).strip().lower()  # Normalize to lowercase
+                print(f"[SEARCH] Detected requested point: '{requested_point}'", flush=True)
+                break
         
         # Check for section keywords with fuzzy matching (handle suffixes like -kan, -i, -an)
         for sec in section_keywords:
@@ -88,7 +193,9 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             is_table_query = True
             table_keywords_in_query = [kw for kw in table_keywords if kw in query_lower]
         
-        if requested_section:
+        if requested_point:
+            print(f"[*] TYPE: POINT-SPECIFIC QUERY (point: '{requested_point}')", flush=True)
+        elif requested_section:
             print(f"[*] TYPE: SECTION QUERY ('{requested_section}')", flush=True)
         elif is_table_query:
             print(f"[*] TYPE: TABLE QUERY (keywords: {table_keywords_in_query})", flush=True)
@@ -145,8 +252,45 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             chunk_lower = chunk.lower()
             score = 0.0
             
-            # ===== SECTION MATCHING - HIGHEST PRIORITY =====
-            if requested_section:
+            # ===== POINT-SPECIFIC MATCHING - HIGHEST PRIORITY =====
+            if requested_point:
+                # Check if this chunk contains the requested point (a, b, c, 1, 2, 3, etc)
+                # OCR formats vary: "a.", "b.", "1.", "a)", "b)", etc
+                
+                # Multiple patterns to try (each more lenient)
+                # GENERIC: match both letter and number points with . ) or : separator
+                patterns_exact = [
+                    rf'^\s*{re.escape(requested_point)}[\.\)\:]',  # "a." or "a)" or "a:" at line start
+                    rf'^\s*\({re.escape(requested_point)}\)',      # "(a)" format
+                ]
+                
+                # Try exact matches first
+                has_requested_point = any(
+                    bool(re.search(pattern, chunk_lower, re.MULTILINE))
+                    for pattern in patterns_exact
+                )
+                
+                # Also check what points are in this chunk (for debug)
+                # GENERIC: match single letter (a-z) or one/two digit numbers (1-99)
+                found_points = re.findall(r'^\s*([a-z]|\d{1,2})[\.\)\:]', chunk_lower, re.MULTILINE)
+                
+                if has_requested_point:
+                    score += 800.0  # VERY high score
+                    print(f"[*] Chunk {chunk_idx}: EXACT point '{requested_point}' FOUND - score +800", flush=True)
+                elif requested_point in found_points:
+                    # Point is in chunk but pattern didn't match - unlikely but handle it
+                    score += 800.0
+                    print(f"[*] Chunk {chunk_idx}: Found '{requested_point}' in list {set(found_points)} - score +800 (pattern fallback)", flush=True)
+                elif found_points:
+                    # Has some points, but not the one we want
+                    score -= 600.0  # Penalty for wrong points
+                    print(f"[*] Chunk {chunk_idx}: Has points {set(found_points)}, NOT '{requested_point}' - score -600", flush=True)
+                else:
+                    # No points in this chunk at all
+                    print(f"[*] Chunk {chunk_idx}: NO points found (looking for '{requested_point}') - score stays 0", flush=True)
+            
+            # ===== SECTION MATCHING - HIGH PRIORITY =====
+            elif requested_section:
                 if chunk_idx in section_chunk_indices:
                     # INSIDE the requested section
                     score += 500.0  # High score for being in correct section
@@ -346,9 +490,51 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             if len(best_chunks) < 5 and top_k > 10:
                 best_chunks = [chunks[i] for i in top_indices[:min(10, len(chunks))]]
         
+        # ===== SPECIAL HANDLING FOR POINT-SPECIFIC QUERIES =====
+        # HIGHEST PRIORITY: Point query takes absolute precedence
+        # BUT: If point + section both requested, first filter by section, then extract point
+        if requested_point:
+            print(f"[*] POINT QUERY active - filtering ONLY for point '{requested_point}'", flush=True)
+            
+            # Check if we also have section constraint
+            if requested_section and section_chunk_indices:
+                print(f"[*] ALSO filtering by section '{requested_section}' (point + section combined)", flush=True)
+                # Filter to chunks in the requested section, that also have the point
+                point_chunk_indices = [
+                    i for i in section_chunk_indices 
+                    if i < len(scores_array) and scores_array[i] >= 800.0
+                ]
+            else:
+                # Point-only query: find all chunks with this point
+                point_chunk_indices = [i for i, score in enumerate(scores_array) if score >= 800.0]
+            
+            if point_chunk_indices:
+                # Sort by score descending
+                point_chunks_with_scores = [(i, scores_array[i]) for i in point_chunk_indices]
+                point_chunks_with_scores.sort(key=lambda x: -x[1])
+                best_chunks = [chunks[i] for i, _ in point_chunks_with_scores[:3]]  # Max 3 chunks
+                if requested_section:
+                    print(f"[✓] POINT+SECTION QUERY: Found {len(best_chunks)} chunks with point '{requested_point}' in section '{requested_section}'", flush=True)
+                else:
+                    print(f"[✓] POINT QUERY: Found {len(best_chunks)} chunks with exact point match (score >= 800)", flush=True)
+                print(f"[*] Point chunk scores: {[f'{scores_array[i]:.0f}' for i in point_chunk_indices[:5]]}", flush=True)
+            else:
+                # No exact match found
+                if requested_section:
+                    print(f"[!] POINT+SECTION QUERY: NO point '{requested_point}' found in section '{requested_section}'", flush=True)
+                else:
+                    print(f"[!] POINT QUERY: NO exact matches found (score >= 800)", flush=True)
+                print(f"[*] Top chunk scores: {sorted(scores_array, reverse=True)[:10]}", flush=True)
+                
+                # For point queries: DON'T use fallback chunks
+                # Better to return nothing than return wrong points
+                best_chunks = []
+                print(f"[!] POINT QUERY: Returning NO chunks (too strict, but prevents showing all points)", flush=True)
+        
         # ===== SPECIAL HANDLING FOR SECTION QUERIES =====
-        if requested_section and section_chunk_indices:
+        elif requested_section and section_chunk_indices:
             # For section queries: return ALL chunks from the section (in order)
+            print(f"[*] SECTION QUERY active - returning all chunks from section '{requested_section}'", flush=True)
             section_indices_sorted = sorted(section_chunk_indices)
             best_chunks = [chunks[i] for i in section_indices_sorted]
             print(f"[✓] SECTION QUERY: Returning ALL {len(best_chunks)} chunks from section '{requested_section}'", flush=True)
@@ -357,6 +543,17 @@ async def search_chunks_strict(query: str, session_id: str, doc_id: str, SESSION
             # Fallback: take top chunks anyway
             print(f"[!] No chunks above threshold, taking top chunks", flush=True)
             best_chunks = [chunks[i] for i in np.argsort(-scores_array)[:20]]
+        
+        # ===== EXTRACT ONLY REQUESTED POINT FROM CHUNKS =====
+        # If point query, extract ONLY that point from each chunk
+        if requested_point and best_chunks:
+            print(f"[*] POINT QUERY: Extracting ONLY point '{requested_point}' from {len(best_chunks)} chunks", flush=True)
+            extracted_chunks = []
+            for i, chunk in enumerate(best_chunks):
+                extracted = _extract_point_content(chunk, requested_point)
+                extracted_chunks.append(extracted)
+                print(f"[*]   Chunk {i}: {len(chunk)} chars → {len(extracted)} chars", flush=True)
+            best_chunks = extracted_chunks
         
         # Print diagnostics - use top_indices if available, otherwise calculate
         if 'top_indices' not in locals():
