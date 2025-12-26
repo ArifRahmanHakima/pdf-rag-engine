@@ -3,6 +3,11 @@ document.addEventListener('DOMContentLoaded', () => {
   console.log('🚀 Initializing ChatPDF...');
   
   try {
+    // Initialize status monitor first
+    if (typeof statusMonitor !== 'undefined') {
+      console.log('✅ Status monitor initialized');
+    }
+    
     // Initialize all modules in order
     UIHandler.init();
     PDFHandler.init();

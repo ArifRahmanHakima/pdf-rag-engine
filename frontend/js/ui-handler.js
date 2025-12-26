@@ -256,7 +256,63 @@ async processPDF(file) {
           try {
             const response = JSON.parse(xhr.responseText);
             
-            if (response.status === 'success') {
+            if (response.status === 'queued') {
+              // File diterima, mulai monitoring dengan status modal
+              const docId = response.doc_id;
+              
+              // Complete step 1
+              this.updateProcessingStep({ step: 'reading', progress: 100, status: 'completed' });
+              await Utils.sleep(300);
+              
+              // Simpan doc_id untuk querynya nanti
+              STATE.docId = docId;
+              
+              // Tampilkan status modal
+              if (typeof statusMonitor !== 'undefined') {
+                statusMonitor.showModal(docId);
+              }
+              
+              // Step 2-4 akan diupdate dari status modal
+              // Tapi set default progress di UI untuk fallback
+              this.updateProcessingStep({ step: 'analyzing', progress: 0, status: 'processing' });
+              
+              // Tunggu hingga status menjadi completed (cek setiap 3 detik)
+              let isProcessing = true;
+              let checkCount = 0;
+              const maxChecks = 600; // 30 menit maksimal
+              
+              while (isProcessing && checkCount < maxChecks) {
+                checkCount++;
+                await Utils.sleep(3000);
+                
+                // Cek status
+                try {
+                  const statusResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/status/${docId}`);
+                  const statusData = await statusResponse.json();
+                  
+                  if (statusData.status === 'completed') {
+                    this.updateProcessingStep({ step: 'embedding', progress: 100, status: 'completed' });
+                    await Utils.sleep(300);
+                    this.updateProcessingStep({ step: 'ready', progress: 100, status: 'completed' });
+                    await Utils.sleep(500);
+                    isProcessing = false;
+                    resolve(response);
+                  } else if (statusData.status === 'failed') {
+                    reject(new Error(`Processing failed: ${statusData.message}`));
+                    return;
+                  }
+                } catch (error) {
+                  console.error('Error checking status:', error);
+                }
+              }
+              
+              if (isProcessing) {
+                reject(new Error('Processing timeout after 30 minutes'));
+              }
+            } else if (response.status === 'success') {
+              // Old behavior - instant processing
+              STATE.docId = response.doc_id;
+              
               // Complete step 1
               this.updateProcessingStep({ step: 'reading', progress: 100, status: 'completed' });
               await Utils.sleep(300);
