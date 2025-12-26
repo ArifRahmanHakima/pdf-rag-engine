@@ -30,7 +30,104 @@ const STATE = {
   scale: CONFIG.DEFAULT_SCALE,
   isMobile: window.innerWidth <= 768,
   isProcessing: false,
-  ws: null
+  ws: null,
+  // Document management
+  documents: {}, // { docId: { fileName, chatId, messages: [], pdfData: null } }
+};
+
+// Document Storage Manager
+const DocStorage = {
+  STORAGE_KEY: 'chatpdf_documents',
+  
+  // Load all documents from localStorage
+  loadAll() {
+    try {
+      const data = localStorage.getItem(this.STORAGE_KEY);
+      if (data) {
+        STATE.documents = JSON.parse(data);
+      }
+    } catch (e) {
+      console.error('Error loading documents:', e);
+      STATE.documents = {};
+    }
+  },
+  
+  // Save all documents to localStorage
+  saveAll() {
+    try {
+      // Don't save pdfData to localStorage (too large)
+      const docsToSave = {};
+      for (const [docId, doc] of Object.entries(STATE.documents)) {
+        docsToSave[docId] = {
+          fileName: doc.fileName,
+          chatId: doc.chatId,
+          messages: doc.messages || [],
+          uploadTime: doc.uploadTime
+        };
+      }
+      localStorage.setItem(this.STORAGE_KEY, JSON.stringify(docsToSave));
+    } catch (e) {
+      console.error('Error saving documents:', e);
+    }
+  },
+  
+  // Add or update a document
+  saveDocument(docId, fileName, chatId = null) {
+    if (!STATE.documents[docId]) {
+      STATE.documents[docId] = {
+        fileName,
+        chatId,
+        messages: [],
+        uploadTime: Date.now()
+      };
+    } else {
+      STATE.documents[docId].fileName = fileName;
+      if (chatId) STATE.documents[docId].chatId = chatId;
+    }
+    this.saveAll();
+  },
+  
+  // Save message to document
+  saveMessage(docId, role, text) {
+    if (STATE.documents[docId]) {
+      if (!STATE.documents[docId].messages) {
+        STATE.documents[docId].messages = [];
+      }
+      STATE.documents[docId].messages.push({ role, text, time: Date.now() });
+      this.saveAll();
+    }
+  },
+  
+  // Update chatId for document
+  updateChatId(docId, chatId) {
+    if (STATE.documents[docId]) {
+      STATE.documents[docId].chatId = chatId;
+      this.saveAll();
+    }
+  },
+  
+  // Get document
+  getDocument(docId) {
+    return STATE.documents[docId] || null;
+  },
+  
+  // Delete document
+  deleteDocument(docId) {
+    if (STATE.documents[docId]) {
+      delete STATE.documents[docId];
+      this.saveAll();
+      return true;
+    }
+    return false;
+  },
+  
+  // Get all documents as array
+  getAllDocuments() {
+    return Object.entries(STATE.documents).map(([docId, doc]) => ({
+      docId,
+      ...doc
+    })).sort((a, b) => (b.uploadTime || 0) - (a.uploadTime || 0));
+  }
 };
 
 // Configure PDF.js

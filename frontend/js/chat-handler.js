@@ -61,6 +61,10 @@ async sendMessage() {
 
     // Add user message
     this.addMessage('user', question);
+    
+    // Save user message to storage
+    DocStorage.saveMessage(STATE.docId, 'user', question);
+    
     this.elements.input.value = '';
     this.elements.input.style.height = 'auto';
     
@@ -101,6 +105,8 @@ async sendMessage() {
       // Update chat ID from response
       if (data.chat_id) {
         STATE.chatId = data.chat_id;
+        // Update chat ID in storage
+        DocStorage.updateChatId(STATE.docId, data.chat_id);
       }
       
       // Add bot response with reveal animation
@@ -108,6 +114,9 @@ async sendMessage() {
         await Utils.sleep(300); // Small delay for natural feel
         const answerHtml = Utils.parseMarkdown(data.answer);
         this.addMessage('bot', answerHtml, true, true); // true untuk HTML, true untuk reveal animation
+        
+        // Save bot message to storage (save raw text, not HTML)
+        DocStorage.saveMessage(STATE.docId, 'bot', data.answer);
       } else {
         throw new Error('Tidak ada jawaban dari server');
       }
@@ -115,7 +124,9 @@ async sendMessage() {
     } catch (error) {
       console.error('Error sending message:', error);
       this.removeTypingIndicator(typingId);
-      this.addMessage('bot', `❌ Maaf, terjadi kesalahan: ${error.message}`);
+      const errorMsg = `❌ Maaf, terjadi kesalahan: ${error.message}`;
+      this.addMessage('bot', errorMsg);
+      DocStorage.saveMessage(STATE.docId, 'bot', errorMsg);
       UIHandler.showError(`Gagal mengirim pesan: ${error.message}`);
     } finally {
       this.elements.sendBtn.disabled = false;
@@ -288,9 +299,11 @@ async sendMessage() {
     }, step.duration);
   },
 
-  clearMessages() {
+  clearMessages(resetChatId = true) {
     this.elements.messages.innerHTML = '';
-    STATE.chatId = null;
+    if (resetChatId) {
+      STATE.chatId = null;
+    }
   },
 
   enableInput(enable = true) {

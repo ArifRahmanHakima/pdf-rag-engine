@@ -33,6 +33,10 @@ const UIHandler = {
     this.elements.chatColumn = document.getElementById('chatColumn');
     this.elements.resizer = document.getElementById('resizer');
 
+    // Load saved documents from localStorage
+    DocStorage.loadAll();
+    this.renderChatList();
+
     this.attachEvents();
     this.checkMobile();
   },
@@ -174,8 +178,7 @@ async processPDF(file) {
       ChatHandler.clearMessages();
       ChatHandler.enableInput(false);
       
-      // Add to chat list
-      this.addToChatList(file.name);
+      // Don't add to chat list yet - wait for doc_id
       
       // Show processing indicator
       this.showProcessingSteps();
@@ -211,6 +214,12 @@ async processPDF(file) {
       if (uploadResult && uploadResult.doc_id) {
         STATE.docId = uploadResult.doc_id;
         console.log('📄 Document ID:', STATE.docId);
+        
+        // Add to chat list with doc_id
+        this.addToChatList(file.name, STATE.docId);
+        
+        // Save welcome message
+        DocStorage.saveMessage(STATE.docId, 'bot', welcomeMsg);
       }
       
       // Enable input
@@ -459,28 +468,225 @@ async processPDF(file) {
     }
   },
 
-  addToChatList(fileName) {
-    // Remove active from all items
+  addToChatList(fileName, docId = null) {
+    // If docId provided, save to storage
+    if (docId) {
+      DocStorage.saveDocument(docId, fileName);
+    }
+    
+    // Re-render the chat list
+    this.renderChatList();
+    
+    // Set active the new/current item
+    const currentDocId = docId || STATE.docId;
+    this.setActiveChatItem(currentDocId);
+  },
+  
+  renderChatList() {
+    // Clear existing list
+    this.elements.chatList.innerHTML = '';
+    
+    // Get all documents
+    const documents = DocStorage.getAllDocuments();
+    
+    console.log('📋 Rendering chat list:', documents.length, 'documents');
+    
+    if (documents.length === 0) {
+      const emptyMsg = document.createElement('div');
+      emptyMsg.className = 'chat-list-empty';
+      emptyMsg.textContent = 'Belum ada dokumen';
+      emptyMsg.style.cssText = 'color: #888; font-size: 12px; padding: 10px; text-align: center;';
+      this.elements.chatList.appendChild(emptyMsg);
+      return;
+    }
+    
+    const self = this; // Store reference to UIHandler
+    
+    documents.forEach(doc => {
+      const chatItem = document.createElement('div');
+      chatItem.className = 'chat-item';
+      chatItem.setAttribute('data-doc-id', doc.docId);
+      
+      if (doc.docId === STATE.docId) {
+        chatItem.classList.add('active');
+      }
+      
+      // Container for filename
+      const fileNameSpan = document.createElement('span');
+      fileNameSpan.className = 'chat-item-name';
+      fileNameSpan.textContent = doc.fileName;
+      fileNameSpan.title = doc.fileName;
+      
+      // Delete button
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'chat-item-delete';
+      deleteBtn.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <polyline points="3 6 5 6 21 6"></polyline>
+        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+        <line x1="10" y1="11" x2="10" y2="17"></line>
+        <line x1="14" y1="11" x2="14" y2="17"></line>
+      </svg>`;
+      deleteBtn.title = 'Hapus dokumen';
+      deleteBtn.type = 'button';
+      
+      // Use closure to capture doc values
+      const docIdToDelete = doc.docId;
+      const fileNameToDelete = doc.fileName;
+      
+      deleteBtn.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        console.log('🗑️ Delete clicked for:', fileNameToDelete);
+        self.deleteDocument(docIdToDelete, fileNameToDelete);
+      });
+      
+      chatItem.appendChild(fileNameSpan);
+      chatItem.appendChild(deleteBtn);
+      
+      // Click to switch document - use closure
+      const docIdToSwitch = doc.docId;
+      chatItem.addEventListener('click', function(e) {
+        // Don't switch if clicking delete button
+        if (e.target.classList.contains('chat-item-delete')) {
+          return;
+        }
+        console.log('📄 Switching to document:', docIdToSwitch);
+        self.switchToDocument(docIdToSwitch);
+      });
+      
+      this.elements.chatList.appendChild(chatItem);
+    });
+  },
+  
+  setActiveChatItem(docId) {
+    console.log('🎯 Setting active chat item:', docId);
     document.querySelectorAll('.chat-item').forEach(item => {
       item.classList.remove('active');
+      const itemDocId = item.getAttribute('data-doc-id');
+      if (itemDocId === docId) {
+        item.classList.add('active');
+        console.log('✅ Found and activated item');
+      }
     });
-
-    // Create new chat item
-    const chatItem = document.createElement('div');
-    chatItem.className = 'chat-item active';
-    chatItem.textContent = fileName;
-    chatItem.title = fileName;
+  },
+  
+  async switchToDocument(docId) {
+    console.log('🔄 switchToDocument called with:', docId);
     
-    // Add click handler
-    chatItem.addEventListener('click', () => {
-      document.querySelectorAll('.chat-item').forEach(item => {
-        item.classList.remove('active');
+    const doc = DocStorage.getDocument(docId);
+    if (!doc) {
+      console.error('❌ Document not found:', docId);
+      this.showError('Dokumen tidak ditemukan');
+      return;
+    }
+    
+    console.log('📄 Found document:', doc.fileName);
+    
+    // Update state
+    STATE.docId = docId;
+    STATE.chatId = doc.chatId || null;
+    STATE.currentPdfName = doc.fileName;
+    STATE.currentFileName = doc.fileName;
+    
+    // Update UI
+    this.elements.welcomeScreen.style.display = 'none';
+    this.elements.chatInterface.classList.add('active');
+    this.elements.chatTitle.textContent = `📄 ${doc.fileName}`;
+    
+    // Set active in list
+    this.setActiveChatItem(docId);
+    
+    // Clear and load messages
+    ChatHandler.clearMessages(false); // false = don't reset chatId
+    
+    // Load saved messages
+    if (doc.messages && doc.messages.length > 0) {
+      console.log('💬 Loading', doc.messages.length, 'messages');
+      doc.messages.forEach(msg => {
+        const isHtml = msg.role === 'bot';
+        ChatHandler.addMessage(msg.role, msg.text, isHtml, false);
       });
-      chatItem.classList.add('active');
-      this.elements.chatTitle.textContent = `📄 ${fileName}`;
-    });
+    } else {
+      // Add welcome message if no history
+      console.log('👋 Adding welcome message (no history)');
+      const welcomeMsg = `Halo! Dokumen "${doc.fileName}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
+      ChatHandler.addMessage('bot', welcomeMsg);
+      DocStorage.saveMessage(docId, 'bot', welcomeMsg);
+    }
     
-    this.elements.chatList.prepend(chatItem);
+    // Enable input
+    ChatHandler.enableInput(true);
+    
+    // Try to load PDF if file exists
+    try {
+      await this.loadPDFFromServer(doc.fileName);
+    } catch (e) {
+      console.warn('Could not load PDF preview:', e);
+    }
+    
+    // Close sidebar on mobile
+    if (STATE.isMobile) {
+      this.closeSidebar();
+    }
+    
+    console.log('✅ Switched to document:', doc.fileName);
+  },
+  
+  async loadPDFFromServer(fileName) {
+    // Try to fetch PDF from uploads folder
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/uploads/${encodeURIComponent(fileName)}`);
+      if (response.ok) {
+        const blob = await response.blob();
+        const file = new File([blob], fileName, { type: 'application/pdf' });
+        await PDFHandler.loadPDF(file);
+      }
+    } catch (e) {
+      console.warn('PDF file not available for preview');
+    }
+  },
+  
+  deleteDocument(docId, fileName) {
+    // Confirm deletion
+    if (!confirm(`Hapus dokumen "${fileName}"?\n\nSemua riwayat chat akan dihapus.`)) {
+      return;
+    }
+    
+    // Delete from storage
+    DocStorage.deleteDocument(docId);
+    
+    // Delete from server (optional - call API)
+    this.deleteDocumentFromServer(docId).catch(e => console.warn('Server delete failed:', e));
+    
+    // If current document is deleted, reset to welcome screen
+    if (STATE.docId === docId) {
+      STATE.docId = null;
+      STATE.chatId = null;
+      STATE.currentPdfName = '';
+      STATE.currentFileName = '';
+      
+      this.elements.chatInterface.classList.remove('active');
+      this.elements.welcomeScreen.style.display = 'flex';
+      ChatHandler.clearMessages();
+      PDFHandler.reset();
+    }
+    
+    // Re-render list
+    this.renderChatList();
+    
+    this.showSuccess('Dokumen berhasil dihapus');
+  },
+  
+  async deleteDocumentFromServer(docId) {
+    try {
+      const response = await fetch(`${CONFIG.API_BASE_URL}/upload/${docId}`, {
+        method: 'DELETE'
+      });
+      return response.ok;
+    } catch (e) {
+      console.error('Error deleting from server:', e);
+      return false;
+    }
   },
 
   setupResizer() {

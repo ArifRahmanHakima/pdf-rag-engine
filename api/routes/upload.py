@@ -1,6 +1,7 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 import os
+import shutil
 import traceback
 import asyncio
 from api.services.pdf_processor import (
@@ -8,7 +9,8 @@ from api.services.pdf_processor import (
     generate_summary_async,
     get_process_status,
     get_doc_id,
-    ProcessStatus
+    ProcessStatus,
+    rag_instances
 )
 
 router = APIRouter()
@@ -97,3 +99,27 @@ async def get_upload_status(doc_id: str):
         "start_time": status["start_time"],
         "completed_time": status.get("completed_time")
     }
+
+@router.delete("/{doc_id}")
+async def delete_document(doc_id: str):
+    """Delete a document and its associated data"""
+    try:
+        # Remove from RAG instances cache
+        if doc_id in rag_instances:
+            del rag_instances[doc_id]
+            print(f"🗑️ Removed RAG instance for doc_id: {doc_id}")
+        
+        # Delete RAG storage folder
+        rag_storage_dir = os.path.join(os.getenv("WORKING_DIR", "./rag_storage"), doc_id)
+        if os.path.exists(rag_storage_dir):
+            shutil.rmtree(rag_storage_dir)
+            print(f"🗑️ Deleted RAG storage: {rag_storage_dir}")
+        
+        return {
+            "status": "success",
+            "message": f"Document {doc_id} deleted successfully"
+        }
+        
+    except Exception as e:
+        print(f"❌ Error deleting document {doc_id}: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Gagal menghapus dokumen: {str(e)}")

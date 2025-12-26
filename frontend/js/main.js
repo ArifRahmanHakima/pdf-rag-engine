@@ -82,7 +82,9 @@ window.ChatPDFDebug = {
   PDFHandler,
   ChatHandler,
   UIHandler,
-  Utils
+  Utils,
+  DocStorage
 };
 
 console.log('💡 Debug tools available at window.ChatPDFDebug');
+console.log('📚 Loaded documents:', DocStorage.getAllDocuments().length);
