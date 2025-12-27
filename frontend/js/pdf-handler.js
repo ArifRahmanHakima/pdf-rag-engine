@@ -74,14 +74,23 @@ const PDFHandler = {
           STATE.pdfDoc = await pdfjsLib.getDocument(typedarray).promise;
           
           this.elements.pageInput.max = STATE.pdfDoc.numPages;
-          this.updatePageInfo();
           
           // Reset to first page and default scale
           STATE.pageNum = 1;
           STATE.scale = CONFIG.DEFAULT_SCALE;
           
-          await this.renderPage(STATE.pageNum);
+          // Create container for all pages
+          this.createPDFContainer();
+          
+          // Render first batch of pages
+          await this.renderInitialPages();
+          
+          this.updatePageInfo();
           this.showLoading(false);
+          
+          // Setup scroll listener for continuous rendering
+          this.setupScrollListener();
+          
           resolve();
         } catch (error) {
           console.error('Error loading PDF:', error);
@@ -99,111 +108,221 @@ const PDFHandler = {
     });
   },
 
-  async renderPage(num) {
+  createPDFContainer() {
+    // Clear existing and create wrapper
+    this.elements.canvasContainer.innerHTML = '';
+    
+    const wrapper = document.createElement('div');
+    wrapper.id = 'pdfPagesWrapper';
+    
+    this.elements.canvasContainer.appendChild(wrapper);
+  },
+
+  async renderInitialPages() {
     if (!STATE.pdfDoc) return;
     
-    STATE.pageRendering = true;
-    this.updateButtonStates();
+    // Create canvas elements for all pages
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    for (let pageNum = 1; pageNum <= STATE.pdfDoc.numPages; pageNum++) {
+      const canvas = document.createElement('canvas');
+      canvas.dataset.page = pageNum;
+      wrapper.appendChild(canvas);
+    }
+    
+    // Render first page immediately
+    await this.renderPageToCanvas(1);
+  },
+
+  setupScrollListener() {
+    if (!this.elements.canvasContainer) return;
+    
+    const scrollContainer = this.elements.canvasContainer;
+    let scrollTimeout;
+    
+    scrollContainer.addEventListener('scroll', () => {
+      clearTimeout(scrollTimeout);
+      scrollTimeout = setTimeout(() => {
+        this.updateCurrentPageFromScroll();
+        this.renderVisiblePages();
+      }, 150);
+    });
+  },
+
+  updateCurrentPageFromScroll() {
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (!wrapper) return;
+    
+    const scrollContainer = this.elements.canvasContainer;
+    const containerRect = scrollContainer.getBoundingClientRect();
+    const pageCanvases = wrapper.querySelectorAll('canvas');
+    
+    let closestPage = 1;
+    let closestDistance = Infinity;
+    
+    pageCanvases.forEach((canvas, index) => {
+      const canvasRect = canvas.getBoundingClientRect();
+      const distance = Math.abs(canvasRect.top - (containerRect.top + containerRect.height / 2));
+      
+      if (distance < closestDistance) {
+        closestDistance = distance;
+        closestPage = index + 1;
+      }
+    });
+    
+    if (closestPage !== STATE.pageNum) {
+      STATE.pageNum = closestPage;
+      this.updatePageInfo();
+    }
+  },
+
+  renderVisiblePages() {
+    if (!STATE.pdfDoc) return;
+    
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (!wrapper) return;
+    
+    const scrollContainer = this.elements.canvasContainer;
+    const containerHeight = scrollContainer.clientHeight;
+    const scrollTop = scrollContainer.scrollTop;
+    
+    // Render pages that are visible or close to visible area
+    const pageCanvases = wrapper.querySelectorAll('canvas');
+    pageCanvases.forEach((canvas, index) => {
+      const pageNum = index + 1;
+      const canvasRect = canvas.getBoundingClientRect();
+      
+      // Check if canvas is in visible area (with some margin for lazy loading)
+      const isInViewport = canvasRect.bottom > -500 && canvasRect.top < containerHeight + 500;
+      
+      if (isInViewport && canvas.dataset.rendered !== 'true') {
+        this.renderPageToCanvas(pageNum);
+      }
+    });
+  },
+
+  async renderPageToCanvas(pageNum) {
+    if (!STATE.pdfDoc || pageNum < 1 || pageNum > STATE.pdfDoc.numPages) return;
+    
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (!wrapper) return;
+    
+    const canvas = wrapper.querySelector(`canvas[data-page="${pageNum}"]`);
+    if (!canvas || canvas.dataset.rendered === 'true') return;
     
     try {
-      const page = await STATE.pdfDoc.getPage(num);
+      const page = await STATE.pdfDoc.getPage(pageNum);
       const viewport = page.getViewport({ scale: STATE.scale });
-      const canvas = this.elements.canvas;
       const context = canvas.getContext('2d');
       
-      // Set canvas dimensions
-      canvas.height = viewport.height;
       canvas.width = viewport.width;
+      canvas.height = viewport.height;
       
-      // Render PDF page
       const renderContext = {
         canvasContext: context,
         viewport: viewport
       };
       
       await page.render(renderContext).promise;
-      
-      STATE.pageRendering = false;
-      STATE.pageNum = num;
-      
-      // If there's a pending page render, do it now
-      if (STATE.pageNumPending !== null) {
-        const pending = STATE.pageNumPending;
-        STATE.pageNumPending = null;
-        this.renderPage(pending);
-      }
-      
-      this.updatePageInfo();
-      this.updateButtonStates();
+      canvas.dataset.rendered = 'true';
     } catch (error) {
-      console.error('Error rendering page:', error);
-      STATE.pageRendering = false;
-      this.updateButtonStates();
-    }
-  },
-
-  queueRenderPage(num) {
-    if (STATE.pageRendering) {
-      STATE.pageNumPending = num;
-    } else {
-      this.renderPage(num);
+      console.error('Error rendering page ' + pageNum + ':', error);
     }
   },
 
   prevPage() {
     if (STATE.pageNum <= 1) return;
     STATE.pageNum--;
-    this.queueRenderPage(STATE.pageNum);
+    this.updatePageInfo();
+    
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (wrapper) {
+      const canvas = wrapper.querySelector(`canvas[data-page="${STATE.pageNum}"]`);
+      if (canvas) {
+        canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
   },
 
   nextPage() {
-    if (!STATE.pdfDoc || STATE.pageNum >= STATE.pdfDoc.numPages) return;
+    if (STATE.pageNum >= STATE.pdfDoc.numPages) return;
     STATE.pageNum++;
-    this.queueRenderPage(STATE.pageNum);
+    this.updatePageInfo();
+    
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (wrapper) {
+      const canvas = wrapper.querySelector(`canvas[data-page="${STATE.pageNum}"]`);
+      if (canvas) {
+        canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
   },
 
   goToPage(num) {
-    if (!STATE.pdfDoc) return;
-    
-    if (isNaN(num)) num = 1;
-    if (num < 1) num = 1;
-    if (num > STATE.pdfDoc.numPages) num = STATE.pdfDoc.numPages;
-    
+    if (num < 1 || num > STATE.pdfDoc.numPages) return;
     STATE.pageNum = num;
-    this.queueRenderPage(STATE.pageNum);
+    this.updatePageInfo();
+    
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (wrapper) {
+      const canvas = wrapper.querySelector(`canvas[data-page="${STATE.pageNum}"]`);
+      if (canvas) {
+        canvas.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+    }
   },
 
   zoomIn() {
     if (STATE.scale >= CONFIG.MAX_SCALE) return;
     STATE.scale += CONFIG.SCALE_STEP;
-    STATE.scale = Math.round(STATE.scale * 10) / 10; // Round to 1 decimal
-    this.queueRenderPage(STATE.pageNum);
+    STATE.scale = Math.round(STATE.scale * 10) / 10;
+    this.reRenderAllPages();
   },
 
   zoomOut() {
     if (STATE.scale <= CONFIG.MIN_SCALE) return;
     STATE.scale -= CONFIG.SCALE_STEP;
-    STATE.scale = Math.round(STATE.scale * 10) / 10; // Round to 1 decimal
-    this.queueRenderPage(STATE.pageNum);
+    STATE.scale = Math.round(STATE.scale * 10) / 10;
+    this.reRenderAllPages();
+  },
+
+  reRenderAllPages() {
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (!wrapper) return;
+    
+    const canvases = wrapper.querySelectorAll('canvas');
+    canvases.forEach(canvas => {
+      canvas.dataset.rendered = 'false';
+    });
+    
+    // Re-render visible pages
+    this.renderVisiblePages();
+    this.updatePageInfo();
   },
 
   updatePageInfo() {
     if (!STATE.pdfDoc) return;
     
-    this.elements.pageInfo.textContent = `of ${STATE.pdfDoc.numPages}`;
-    this.elements.pageInput.value = STATE.pageNum;
+    if (this.elements.pageInfo) {
+      this.elements.pageInfo.textContent = `${STATE.pageNum} of ${STATE.pdfDoc.numPages}`;
+    }
+    if (this.elements.pageInput) {
+      this.elements.pageInput.value = STATE.pageNum;
+      this.elements.pageInput.max = STATE.pdfDoc.numPages;
+    }
+    
+    this.updateButtonStates();
   },
 
   updateButtonStates() {
     if (!STATE.pdfDoc) return;
     
     // Disable/enable navigation buttons
-    this.elements.prevBtn.disabled = STATE.pageNum <= 1;
-    this.elements.nextBtn.disabled = STATE.pageNum >= STATE.pdfDoc.numPages;
+    if (this.elements.prevBtn) this.elements.prevBtn.disabled = STATE.pageNum <= 1;
+    if (this.elements.nextBtn) this.elements.nextBtn.disabled = STATE.pageNum >= STATE.pdfDoc.numPages;
     
     // Disable/enable zoom buttons
-    this.elements.zoomInBtn.disabled = STATE.scale >= CONFIG.MAX_SCALE;
-    this.elements.zoomOutBtn.disabled = STATE.scale <= CONFIG.MIN_SCALE;
+    if (this.elements.zoomInBtn) this.elements.zoomInBtn.disabled = STATE.scale >= CONFIG.MAX_SCALE;
+    if (this.elements.zoomOutBtn) this.elements.zoomOutBtn.disabled = STATE.scale <= CONFIG.MIN_SCALE;
   },
 
   showLoading(show) {
@@ -218,12 +337,10 @@ const PDFHandler = {
     STATE.pdfDoc = null;
     STATE.pageNum = 1;
     STATE.scale = CONFIG.DEFAULT_SCALE;
-    STATE.pageRendering = false;
-    STATE.pageNumPending = null;
     
-    if (this.elements.canvas) {
-      const context = this.elements.canvas.getContext('2d');
-      context.clearRect(0, 0, this.elements.canvas.width, this.elements.canvas.height);
+    const wrapper = document.getElementById('pdfPagesWrapper');
+    if (wrapper) {
+      wrapper.innerHTML = '';
     }
   }
 };
