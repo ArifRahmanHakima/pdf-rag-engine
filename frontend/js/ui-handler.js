@@ -465,11 +465,17 @@ async processPDF(file) {
       if (uploadResult && uploadResult.summary) {
         const summaryHtml = Utils.parseMarkdown(`📋 **Ringkasan Dokumen:**\n\n${uploadResult.summary}`);
         ChatHandler.addMessage('bot', summaryHtml, true);
+        DocStorage.saveMessage(STATE.docId, 'bot', `📋 **Ringkasan Dokumen:**\n\n${uploadResult.summary}`);
       }
       
       // Add welcome message
       const welcomeMsg = `Halo! Dokumen "${file.name}" berhasil diproses. Silakan tanyakan apapun tentang isi dokumen ini.`;
       ChatHandler.addMessage('bot', welcomeMsg);
+      
+      // Show suggested questions if available
+      if (uploadResult && uploadResult.suggested_questions && uploadResult.suggested_questions.length > 0) {
+        ChatHandler.showSuggestedQuestions(uploadResult.suggested_questions);
+      }
       
       // Save doc_id dari response backend
       if (uploadResult && uploadResult.doc_id) {
@@ -566,6 +572,20 @@ async processPDF(file) {
                     this.updateProcessingStep({ step: 'ready', progress: 100, status: 'completed' });
                     await Utils.sleep(500);
                     isProcessing = false;
+                    
+                    // Fetch summary and suggested questions
+                    try {
+                      const summaryResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/summary/${docId}`);
+                      const summaryData = await summaryResponse.json();
+                      
+                      if (summaryData.status === 'success') {
+                        response.summary = summaryData.summary;
+                        response.suggested_questions = summaryData.suggested_questions;
+                      }
+                    } catch (err) {
+                      console.error('Error fetching summary:', err);
+                    }
+                    
                     resolve(response);
                   } else if (statusData.status === 'failed') {
                     reject(new Error(`Processing failed: ${statusData.message}`));

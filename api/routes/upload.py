@@ -7,6 +7,7 @@ import asyncio
 from api.services.pdf_processor import (
     process_pdf_async, 
     generate_summary_async,
+    generate_suggested_questions_async,
     get_process_status,
     get_doc_id,
     ProcessStatus,
@@ -123,3 +124,56 @@ async def delete_document(doc_id: str):
     except Exception as e:
         print(f"❌ Error deleting document {doc_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Gagal menghapus dokumen: {str(e)}")
+
+@router.get("/summary/{doc_id}")
+async def get_document_summary(doc_id: str):
+    """Get summary and suggested questions for a document"""
+    try:
+        # Check if document exists in RAG
+        status = get_process_status(doc_id)
+        
+        if status["status"] == ProcessStatus.PROCESSING:
+            return {
+                "status": "processing",
+                "message": "Dokumen masih diproses, mohon tunggu...",
+                "summary": None,
+                "suggested_questions": None
+            }
+        
+        # Find the file path
+        upload_dir = os.getenv("UPLOAD_DIR", "./uploads")
+        file_path = None
+        
+        # Search for file with matching doc_id
+        if os.path.exists(upload_dir):
+            for filename in os.listdir(upload_dir):
+                if get_doc_id(filename) == doc_id:
+                    file_path = os.path.join(upload_dir, filename)
+                    break
+        
+        # Generate summary
+        summary = await generate_summary_async(file_path or "", doc_id)
+        
+        # Generate suggested questions
+        suggested_questions = await generate_suggested_questions_async(doc_id)
+        
+        return {
+            "status": "success",
+            "doc_id": doc_id,
+            "summary": summary,
+            "suggested_questions": suggested_questions
+        }
+        
+    except Exception as e:
+        print(f"❌ Error getting summary for {doc_id}: {str(e)}")
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": str(e),
+            "summary": "Dokumen berhasil diproses dan siap untuk pertanyaan.",
+            "suggested_questions": [
+                "Apa isi utama dari dokumen ini?",
+                "Jelaskan poin-poin penting dalam dokumen ini",
+                "Apakah ada data atau tabel dalam dokumen ini?"
+            ]
+        }

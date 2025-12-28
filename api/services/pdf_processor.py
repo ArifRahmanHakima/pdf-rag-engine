@@ -375,13 +375,104 @@ async def process_pdf_async(file_path: str) -> Tuple[str, str]:
         raise e
 
 async def generate_summary_async(file_path: str, doc_id: str) -> str:
-    """Generate summary from processed PDF - SKIP for speed (target 1 minute)"""
+    """Generate summary from processed PDF using RAG"""
     filename = os.path.basename(file_path)
-    # Skip LLM summary generation entirely to meet 1-minute target
-    # Return instant default message without any LLM call
-    summary = f"✅ Dokumen {filename} berhasil diproses dan siap untuk pertanyaan."
-    print(f"Summary: {summary}")
-    return summary
+    
+    try:
+        # Get RAG instance
+        rag = await get_rag_instance_async(doc_id)
+        
+        if rag is None:
+            return f"✅ Dokumen {filename} berhasil diproses dan siap untuk pertanyaan."
+        
+        # Query for summary
+        summary_prompt = """Berikan ringkasan singkat dan padat dari dokumen ini dalam 3-5 kalimat. 
+Fokus pada poin-poin utama dan informasi penting. Gunakan bahasa Indonesia yang jelas."""
+        
+        param = QueryParam(
+            mode="hybrid",
+            top_k=3,
+            only_need_context=False,
+            response_type="Single Paragraph",
+        )
+        
+        result = await rag.aquery(summary_prompt, param=param)
+        summary = remove_references(result) if isinstance(result, str) else str(result)
+        
+        print(f"Summary generated: {summary[:100]}...")
+        return summary
+        
+    except Exception as e:
+        print(f"⚠️ Summary generation error: {e}")
+        return f"✅ Dokumen {filename} berhasil diproses dan siap untuk pertanyaan."
+
+async def generate_suggested_questions_async(doc_id: str) -> list:
+    """Generate suggested questions based on document content"""
+    try:
+        # Get RAG instance
+        rag = await get_rag_instance_async(doc_id)
+        
+        if rag is None:
+            return [
+                "Apa isi utama dari dokumen ini?",
+                "Jelaskan poin-poin penting dalam dokumen ini",
+                "Apakah ada data atau tabel dalam dokumen ini?"
+            ]
+        
+        # Query for suggested questions
+        question_prompt = """Berdasarkan isi dokumen ini, buatkan 4 pertanyaan yang paling relevan dan menarik yang mungkin ingin ditanyakan oleh pembaca.
+
+Format jawaban (HANYA daftar pertanyaan, satu per baris):
+1. [pertanyaan 1]
+2. [pertanyaan 2]
+3. [pertanyaan 3]
+4. [pertanyaan 4]
+
+Pastikan pertanyaan spesifik berdasarkan konten dokumen."""
+        
+        param = QueryParam(
+            mode="hybrid",
+            top_k=3,
+            only_need_context=False,
+            response_type="Single Paragraph",
+        )
+        
+        result = await rag.aquery(question_prompt, param=param)
+        result_text = remove_references(result) if isinstance(result, str) else str(result)
+        
+        # Parse questions from result
+        questions = []
+        lines = result_text.split('\n')
+        for line in lines:
+            line = line.strip()
+            # Remove numbering like "1.", "2.", etc.
+            if line and len(line) > 10:
+                # Clean up the line
+                clean_line = line.lstrip('0123456789.-) ').strip()
+                if clean_line and '?' in clean_line:
+                    questions.append(clean_line)
+                elif clean_line and len(clean_line) > 15:
+                    questions.append(clean_line + '?')
+        
+        # Return max 4 questions, or defaults if parsing failed
+        if len(questions) >= 2:
+            return questions[:4]
+        else:
+            return [
+                "Apa isi utama dari dokumen ini?",
+                "Jelaskan poin-poin penting dalam dokumen ini",
+                "Apakah ada data statistik dalam dokumen ini?",
+                "Apa kesimpulan dari dokumen ini?"
+            ]
+        
+    except Exception as e:
+        print(f"⚠️ Suggested questions error: {e}")
+        return [
+            "Apa isi utama dari dokumen ini?",
+            "Jelaskan poin-poin penting dalam dokumen ini",
+            "Apakah ada data atau tabel dalam dokumen ini?",
+            "Apa kesimpulan dari dokumen ini?"
+        ]
 
 async def query_document_async(doc_id: str, question: str, top_k: int = 2) -> str:
     """Query specific document by doc_id dengan LightRAG langsung"""
