@@ -124,7 +124,34 @@
               <div class="chat-header">
                 <div class="chat-header-info">
                   <h2 id="chatTitle">📄 Document.pdf</h2>
-                  <button class="header-options">⋯</button>
+                  <div class="header-options-wrapper">
+                    <button class="header-options" id="chatOptionsBtn">⋯</button>
+                    <div class="chat-options-dropdown" id="chatOptionsDropdown">
+                      <button class="dropdown-item" id="renameChatBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                          <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                        </svg>
+                        Ganti nama chat
+                      </button>
+                      <button class="dropdown-item" id="exportChatBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                          <polyline points="7 10 12 15 17 10"></polyline>
+                          <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Ekspor chat
+                      </button>
+                      <div class="dropdown-divider"></div>
+                      <button class="dropdown-item dropdown-item-danger" id="resetChatBtn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <polyline points="1 4 1 10 7 10"></polyline>
+                          <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+                        </svg>
+                        Reset chat
+                      </button>
+                    </div>
+                  </div>
                 </div>
               </div>
 
@@ -176,6 +203,18 @@
           </div>
         </div>
       </main>
+    </div>
+  </div>
+
+  <!-- Rename Modal -->
+  <div class="rename-modal-overlay" id="renameModalOverlay">
+    <div class="rename-modal">
+      <h3>Ganti Nama Chat</h3>
+      <input type="text" id="renameInput" placeholder="Masukkan nama baru...">
+      <div class="rename-modal-actions">
+        <button class="cancel-btn" id="renameCancelBtn">Batal</button>
+        <button class="save-btn" id="renameSaveBtn">Simpan</button>
+      </div>
     </div>
   </div>
 

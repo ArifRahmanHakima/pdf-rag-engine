@@ -12,7 +12,11 @@ const UIHandler = {
     pdfViewerColumn: null,
     chatColumn: null,
     resizer: null,
-    toggleSidebarBtn: null
+    toggleSidebarBtn: null,
+    chatOptionsBtn: null,
+    chatOptionsDropdown: null,
+    renameModalOverlay: null,
+    renameInput: null
   },
 
   isResizing: false,
@@ -34,6 +38,10 @@ const UIHandler = {
     this.elements.chatColumn = document.getElementById('chatColumn');
     this.elements.resizer = document.getElementById('resizer');
     this.elements.toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+    this.elements.chatOptionsBtn = document.getElementById('chatOptionsBtn');
+    this.elements.chatOptionsDropdown = document.getElementById('chatOptionsDropdown');
+    this.elements.renameModalOverlay = document.getElementById('renameModalOverlay');
+    this.elements.renameInput = document.getElementById('renameInput');
 
     // Load sidebar state from localStorage
     this.loadSidebarState();
@@ -69,6 +77,58 @@ const UIHandler = {
           !this.elements.hamburger?.contains(e.target)) {
         this.closeSidebar();
       }
+      
+      // Close dropdown when clicking outside
+      if (this.elements.chatOptionsDropdown?.classList.contains('active') &&
+          !this.elements.chatOptionsBtn?.contains(e.target) &&
+          !this.elements.chatOptionsDropdown?.contains(e.target)) {
+        this.closeChatOptionsDropdown();
+      }
+    });
+
+    // Chat options dropdown toggle
+    this.elements.chatOptionsBtn?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      this.toggleChatOptionsDropdown();
+    });
+
+    // Rename chat button
+    document.getElementById('renameChatBtn')?.addEventListener('click', () => {
+      this.closeChatOptionsDropdown();
+      this.openRenameModal();
+    });
+
+    // Export chat button
+    document.getElementById('exportChatBtn')?.addEventListener('click', () => {
+      this.closeChatOptionsDropdown();
+      this.exportChat();
+    });
+
+    // Reset chat button
+    document.getElementById('resetChatBtn')?.addEventListener('click', () => {
+      this.closeChatOptionsDropdown();
+      this.resetChat();
+    });
+
+    // Rename modal events
+    document.getElementById('renameCancelBtn')?.addEventListener('click', () => {
+      this.closeRenameModal();
+    });
+
+    document.getElementById('renameSaveBtn')?.addEventListener('click', () => {
+      this.saveRename();
+    });
+
+    this.elements.renameModalOverlay?.addEventListener('click', (e) => {
+      if (e.target === this.elements.renameModalOverlay) {
+        this.closeRenameModal();
+      }
+    });
+
+    this.elements.renameInput?.addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') {
+        this.saveRename();
+      }
     });
 
     // New chat button
@@ -91,6 +151,144 @@ const UIHandler = {
     window.addEventListener('resize', Utils.debounce(() => {
       this.checkMobile();
     }, 250));
+  },
+
+  // Chat Options Dropdown Functions
+  toggleChatOptionsDropdown() {
+    this.elements.chatOptionsDropdown?.classList.toggle('active');
+  },
+
+  closeChatOptionsDropdown() {
+    this.elements.chatOptionsDropdown?.classList.remove('active');
+  },
+
+  // Rename Modal Functions
+  openRenameModal() {
+    const currentName = this.elements.chatTitle?.textContent?.replace('📄 ', '') || '';
+    if (this.elements.renameInput) {
+      this.elements.renameInput.value = currentName;
+    }
+    this.elements.renameModalOverlay?.classList.add('active');
+    setTimeout(() => {
+      this.elements.renameInput?.focus();
+      this.elements.renameInput?.select();
+    }, 100);
+  },
+
+  closeRenameModal() {
+    this.elements.renameModalOverlay?.classList.remove('active');
+  },
+
+  saveRename() {
+    const newName = this.elements.renameInput?.value?.trim();
+    if (newName) {
+      // Update title
+      if (this.elements.chatTitle) {
+        this.elements.chatTitle.textContent = `📄 ${newName}`;
+      }
+      
+      // Update in storage
+      if (STATE.docId && STATE.documents[STATE.docId]) {
+        STATE.documents[STATE.docId].fileName = newName;
+        DocStorage.saveAll();
+        this.renderChatList();
+      }
+      
+      this.closeRenameModal();
+      this.showSuccess('Nama chat berhasil diubah!');
+    }
+  },
+
+  // Export Chat Function
+  exportChat() {
+    if (!STATE.docId) {
+      this.showError('Tidak ada chat untuk diekspor!');
+      return;
+    }
+
+    const doc = STATE.documents[STATE.docId];
+    if (!doc || !doc.messages || doc.messages.length === 0) {
+      this.showError('Chat kosong, tidak ada yang diekspor!');
+      return;
+    }
+
+    // Create export content
+    let exportContent = `Chat Export - ${doc.fileName}\n`;
+    exportContent += `Tanggal: ${new Date().toLocaleString('id-ID')}\n`;
+    exportContent += `${'='.repeat(50)}\n\n`;
+
+    doc.messages.forEach(msg => {
+      const role = msg.role === 'user' ? '👤 Anda' : '🤖 Bot';
+      const time = msg.time ? new Date(msg.time).toLocaleString('id-ID') : '';
+      exportContent += `${role} ${time ? `(${time})` : ''}:\n${msg.text}\n\n`;
+    });
+
+    // Download as text file
+    const blob = new Blob([exportContent], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `chat-${doc.fileName.replace('.pdf', '')}-${Date.now()}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    this.showSuccess('Chat berhasil diekspor!');
+  },
+
+  // Reset Chat Function
+  resetChat() {
+    if (!STATE.docId) {
+      this.showError('Tidak ada chat untuk direset!');
+      return;
+    }
+
+    if (confirm('Apakah Anda yakin ingin mereset chat ini? Semua pesan akan dihapus.')) {
+      // Clear messages in storage
+      if (STATE.documents[STATE.docId]) {
+        STATE.documents[STATE.docId].messages = [];
+        STATE.documents[STATE.docId].chatId = null;
+        DocStorage.saveAll();
+      }
+
+      // Clear chat messages on screen
+      ChatHandler.clearMessages(true);
+      STATE.chatId = null;
+
+      this.showSuccess('Chat berhasil direset!');
+    }
+  },
+
+  // Success notification
+  showSuccess(message) {
+    // Create success toast
+    const toast = document.createElement('div');
+    toast.className = 'success-toast';
+    toast.innerHTML = `<span>✅</span> ${message}`;
+    toast.style.cssText = `
+      position: fixed;
+      bottom: 20px;
+      right: 20px;
+      background: #10b981;
+      color: white;
+      padding: 12px 20px;
+      border-radius: 8px;
+      font-size: 14px;
+      font-weight: 500;
+      box-shadow: 0 4px 12px rgba(16, 185, 129, 0.3);
+      z-index: 9999;
+      animation: slideInRight 0.3s ease;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    `;
+    document.body.appendChild(toast);
+    
+    setTimeout(() => {
+      toast.style.animation = 'slideOutRight 0.3s ease';
+      setTimeout(() => toast.remove(), 300);
+    }, 3000);
   },
 
   async handleFileUpload(e) {
