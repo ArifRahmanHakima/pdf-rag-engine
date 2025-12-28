@@ -71,6 +71,38 @@
   color: #1f2937;
 }
 
+/* Toggle Sidebar Button */
+.toggle-sidebar-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  background: white;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  cursor: pointer;
+  color: #6b7280;
+  transition: all 0.2s ease;
+}
+
+.toggle-sidebar-btn:hover {
+  background: #f3f4f6;
+  border-color: #7c3aed;
+  color: #7c3aed;
+}
+
+.toggle-sidebar-btn.sidebar-hidden {
+  background: #ede9fe;
+  border-color: #7c3aed;
+  color: #7c3aed;
+}
+
+.toggle-sidebar-btn svg {
+  width: 18px;
+  height: 18px;
+}
+
 .header-btn {
   display: flex;
   align-items: center;

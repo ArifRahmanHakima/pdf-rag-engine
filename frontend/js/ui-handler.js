@@ -11,7 +11,8 @@ const UIHandler = {
     chatList: null,
     pdfViewerColumn: null,
     chatColumn: null,
-    resizer: null
+    resizer: null,
+    toggleSidebarBtn: null
   },
 
   isResizing: false,
@@ -32,6 +33,10 @@ const UIHandler = {
     this.elements.pdfViewerColumn = document.getElementById('pdfViewerColumn');
     this.elements.chatColumn = document.getElementById('chatColumn');
     this.elements.resizer = document.getElementById('resizer');
+    this.elements.toggleSidebarBtn = document.getElementById('toggleSidebarBtn');
+
+    // Load sidebar state from localStorage
+    this.loadSidebarState();
 
     // Load saved documents from localStorage
     DocStorage.loadAll();
@@ -42,8 +47,19 @@ const UIHandler = {
   },
 
   attachEvents() {
-    // Hamburger menu
+    // Hamburger menu (mobile)
     this.elements.hamburger?.addEventListener('click', () => this.toggleSidebar());
+
+    // Toggle sidebar button (desktop)
+    console.log('Toggle button element:', this.elements.toggleSidebarBtn); // Debug log
+    if (this.elements.toggleSidebarBtn) {
+      this.elements.toggleSidebarBtn.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        this.toggleSidebarDesktop();
+      });
+      console.log('Toggle sidebar event listener attached!'); // Debug log
+    }
 
     // Close sidebar when clicking outside on mobile
     document.addEventListener('click', (e) => {
@@ -143,6 +159,53 @@ const UIHandler = {
   closeSidebar() {
     this.elements.sidebar?.classList.remove('active');
     this.elements.hamburger?.classList.remove('active');
+  },
+
+  // Toggle sidebar untuk desktop
+  toggleSidebarDesktop() {
+    console.log('Toggle sidebar clicked!'); // Debug log
+    const sidebar = this.elements.sidebar;
+    const toggleBtn = this.elements.toggleSidebarBtn;
+    const mainContainer = document.querySelector('.main-container');
+    
+    console.log('Sidebar element:', sidebar); // Debug log
+    console.log('MainContainer:', mainContainer); // Debug log
+    
+    if (sidebar) {
+      sidebar.classList.toggle('collapsed');
+      toggleBtn?.classList.toggle('sidebar-hidden');
+      mainContainer?.classList.toggle('sidebar-collapsed');
+      
+      // Update title tooltip
+      const isCollapsed = sidebar.classList.contains('collapsed');
+      console.log('Is collapsed:', isCollapsed); // Debug log
+      
+      if (toggleBtn) {
+        toggleBtn.title = isCollapsed ? 'Tampilkan sidebar' : 'Sembunyikan sidebar';
+      }
+      
+      // Save state to localStorage
+      localStorage.setItem('sidebarCollapsed', isCollapsed ? 'true' : 'false');
+    }
+  },
+
+  // Load sidebar state from localStorage
+  loadSidebarState() {
+    const isCollapsed = localStorage.getItem('sidebarCollapsed') === 'true';
+    
+    if (isCollapsed) {
+      const sidebar = this.elements.sidebar;
+      const toggleBtn = this.elements.toggleSidebarBtn;
+      const mainContainer = document.querySelector('.main-container');
+      
+      sidebar?.classList.add('collapsed');
+      toggleBtn?.classList.add('sidebar-hidden');
+      mainContainer?.classList.add('sidebar-collapsed');
+      
+      if (toggleBtn) {
+        toggleBtn.title = 'Tampilkan sidebar';
+      }
+    }
   },
 
   checkMobile() {
