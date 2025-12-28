@@ -483,3 +483,102 @@
     box-shadow: 0 0 0 10px rgba(124, 58, 237, 0);
   }
 }
+
+/* ============= TABLE STYLING IN CHAT ============= */
+.message-content table,
+.message-content .chat-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 12px 0;
+  font-size: 13px;
+  background: white;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  border: 2px solid #7c3aed;
+}
+
+.message-content table thead,
+.message-content .chat-table .table-header,
+.message-content table tr:first-child {
+  background: linear-gradient(135deg, #7c3aed 0%, #a855f7 100%);
+}
+
+.message-content table th,
+.message-content .chat-table th {
+  padding: 12px 16px;
+  text-align: left;
+  font-weight: 600;
+  color: white;
+  border: 1px solid #6d28d9;
+  white-space: nowrap;
+}
+
+.message-content table td,
+.message-content .chat-table td {
+  padding: 10px 16px;
+  border: 1px solid #e5e7eb;
+  color: #374151;
+}
+
+.message-content table tr:last-child td,
+.message-content .chat-table tr:last-child td {
+  border-bottom: 2px solid #7c3aed;
+}
+
+.message-content table tbody tr:hover,
+.message-content .chat-table .table-row-odd:hover,
+.message-content .chat-table .table-row-even:hover {
+  background: #f3e8ff;
+}
+
+.message-content table tbody tr:nth-child(even),
+.message-content .chat-table .table-row-even {
+  background: #faf5ff;
+}
+
+.message-content table tbody tr:nth-child(odd),
+.message-content .chat-table .table-row-odd {
+  background: white;
+}
+
+/* Special styling for summary/total row */
+.message-content table tbody tr:last-child,
+.message-content .chat-table tr:last-child {
+  font-weight: 600;
+  background: #ede9fe;
+}
+
+/* Responsive table */
+@media (max-width: 600px) {
+  .message-content table,
+  .message-content .chat-table {
+    display: block;
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+  
+  .message-content table th,
+  .message-content table td,
+  .message-content .chat-table th,
+  .message-content .chat-table td {
+    padding: 8px 12px;
+    font-size: 12px;
+  }
+}
+
+/* Table container for better overflow handling */
+.message-content {
+  overflow-x: auto;
+}
+
+/* Numeric column alignment */
+.message-content table td:nth-child(n+2),
+.message-content .chat-table td:nth-child(n+2) {
+  text-align: right;
+}
+
+.message-content table th:nth-child(n+2),
+.message-content .chat-table th:nth-child(n+2) {
+  text-align: right;
+}

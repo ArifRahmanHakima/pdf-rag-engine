@@ -172,12 +172,204 @@ const Utils = {
   // Parse markdown untuk menampilkan formatting di chat
   parseMarkdown(text) {
     if (typeof marked !== 'undefined') {
-      return marked.parse(text);
+      // Konfigurasi marked untuk tabel dan GFM
+      marked.setOptions({
+        gfm: true,        // GitHub Flavored Markdown
+        breaks: true,     // Convert \n to <br>
+        tables: true      // Enable tables
+      });
+      // Pre-process text untuk deteksi tabel non-standard
+      let processedText = this.detectAndConvertTables(text);
+      return marked.parse(processedText);
     }
-    // Fallback simple markdown
-    return text
+    // Fallback simple markdown with table support
+    return this.parseMarkdownFallback(text);
+  },
+
+  // Deteksi dan konversi tabel yang tidak dalam format markdown standard
+  detectAndConvertTables(text) {
+    // Pattern untuk mendeteksi tabel dengan format:
+    // Header1    Header2    Header3
+    // Value1     Value2     Value3
+    
+    const lines = text.split('\n');
+    let result = [];
+    let potentialTableLines = [];
+    let inPotentialTable = false;
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmedLine = line.trim();
+      
+      // Skip empty lines
+      if (!trimmedLine) {
+        if (inPotentialTable && potentialTableLines.length >= 2) {
+          // Convert accumulated table lines
+          result.push(this.convertSpacedTableToMarkdown(potentialTableLines));
+          potentialTableLines = [];
+        }
+        inPotentialTable = false;
+        result.push(line);
+        continue;
+      }
+      
+      // Jika sudah dalam format markdown table, lewati
+      if (trimmedLine.startsWith('|') && trimmedLine.endsWith('|')) {
+        if (inPotentialTable && potentialTableLines.length >= 2) {
+          result.push(this.convertSpacedTableToMarkdown(potentialTableLines));
+          potentialTableLines = [];
+        }
+        inPotentialTable = false;
+        result.push(line);
+        continue;
+      }
+      
+      // Deteksi baris yang terlihat seperti tabel (multiple columns dengan angka)
+      // Pattern: Tahun/text diikuti angka-angka atau text dengan multiple spaces/tabs
+      const isTableLike = this.isTableLikeLine(trimmedLine);
+      
+      if (isTableLike) {
+        inPotentialTable = true;
+        potentialTableLines.push(trimmedLine);
+      } else {
+        if (inPotentialTable && potentialTableLines.length >= 2) {
+          result.push(this.convertSpacedTableToMarkdown(potentialTableLines));
+          potentialTableLines = [];
+        }
+        inPotentialTable = false;
+        result.push(line);
+      }
+    }
+    
+    // Handle table at end
+    if (inPotentialTable && potentialTableLines.length >= 2) {
+      result.push(this.convertSpacedTableToMarkdown(potentialTableLines));
+    }
+    
+    return result.join('\n');
+  },
+
+  // Cek apakah baris terlihat seperti baris tabel
+  isTableLikeLine(line) {
+    // Baris tabel biasanya punya:
+    // 1. Tahun diikuti angka-angka: "2013 68 57 60 185"
+    // 2. Label diikuti angka: "Jumlah 304 261 241 806"
+    // 3. Header dengan multiple words: "Tahun S-1 Teknik Sipil S-1 Teknik Industri"
+    
+    // Pattern 1: Dimulai dengan tahun (4 digit) atau kata diikuti multiple angka
+    const yearPattern = /^\d{4}\s+\d+/;
+    const labelNumberPattern = /^[A-Za-z]+\s*\d*\s+\d+\s+\d+/;
+    const multiColumnPattern = /\s{2,}|\t/; // Multiple spaces atau tab
+    
+    // Hitung jumlah "kolom" (dipisah multiple spaces)
+    const columns = line.split(/\s{2,}|\t/).filter(c => c.trim());
+    
+    if (columns.length >= 3) {
+      // Cek apakah ada angka di kolom-kolom
+      const hasNumbers = columns.some(c => /\d+/.test(c));
+      if (hasNumbers) return true;
+    }
+    
+    if (yearPattern.test(line)) return true;
+    if (labelNumberPattern.test(line)) return true;
+    
+    return false;
+  },
+
+  // Konversi tabel dengan spasi ke format markdown
+  convertSpacedTableToMarkdown(lines) {
+    if (lines.length < 2) return lines.join('\n');
+    
+    let markdownTable = [];
+    
+    lines.forEach((line, index) => {
+      // Split by multiple spaces atau tabs
+      const cells = line.split(/\s{2,}|\t/).filter(c => c.trim());
+      
+      if (cells.length > 0) {
+        const row = '| ' + cells.join(' | ') + ' |';
+        markdownTable.push(row);
+        
+        // Tambahkan separator setelah header
+        if (index === 0) {
+          const separator = '| ' + cells.map(() => '---').join(' | ') + ' |';
+          markdownTable.push(separator);
+        }
+      }
+    });
+    
+    return markdownTable.join('\n');
+  },
+
+  // Fallback parser untuk tabel jika marked tidak tersedia
+  parseMarkdownFallback(text) {
+    // Pre-process untuk deteksi tabel
+    let processedText = this.detectAndConvertTables(text);
+    
+    // Coba deteksi dan konversi tabel markdown
+    let result = processedText;
+    
+    // Simple table detection (lines starting with |)
+    const lines = result.split('\n');
+    let inTable = false;
+    let tableLines = [];
+    let processedLines = [];
+    
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].trim();
+      
+      if (line.startsWith('|') && line.endsWith('|')) {
+        if (!inTable) {
+          inTable = true;
+          tableLines = [];
+        }
+        tableLines.push(line);
+      } else {
+        if (inTable && tableLines.length > 0) {
+          processedLines.push(this.convertTableToHtml(tableLines));
+          tableLines = [];
+          inTable = false;
+        }
+        processedLines.push(line);
+      }
+    }
+    
+    // Handle table at end of text
+    if (inTable && tableLines.length > 0) {
+      processedLines.push(this.convertTableToHtml(tableLines));
+    }
+    
+    result = processedLines.join('\n');
+    
+    // Apply other markdown formatting
+    return result
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
       .replace(/\n/g, '<br>');
+  },
+
+  // Konversi tabel markdown ke HTML
+  convertTableToHtml(tableLines) {
+    if (tableLines.length < 2) return tableLines.join('\n');
+    
+    let html = '<table class="chat-table">';
+    
+    tableLines.forEach((line, index) => {
+      // Skip separator line (---|---|---)
+      if (line.replace(/[|\-:\s]/g, '') === '') return;
+      
+      const cells = line.split('|').filter(cell => cell.trim() !== '');
+      const tag = index === 0 ? 'th' : 'td';
+      const rowClass = index === 0 ? 'table-header' : (index % 2 === 0 ? 'table-row-even' : 'table-row-odd');
+      
+      html += `<tr class="${rowClass}">`;
+      cells.forEach(cell => {
+        html += `<${tag}>${cell.trim()}</${tag}>`;
+      });
+      html += '</tr>';
+    });
+    
+    html += '</table>';
+    return html;
   }
 };

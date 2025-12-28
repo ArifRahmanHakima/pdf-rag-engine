@@ -65,6 +65,20 @@ Jawab pertanyaan baru dengan mempertimbangkan konteks percakapan di atas."""
         else:
             enhanced_question = question
 
+        # Tambahkan instruksi format untuk tabel
+        format_instruction = """
+
+PENTING: Jika jawaban mengandung data tabular atau tabel:
+- Gunakan format tabel Markdown dengan header dan separator
+- Contoh format:
+| Kolom1 | Kolom2 | Kolom3 |
+|--------|--------|--------|
+| Data1  | Data2  | Data3  |
+
+Pastikan tabel rapi dan lengkap."""
+
+        enhanced_question = enhanced_question + format_instruction
+
         # Query dokumen spesifik menggunakan doc_id
         answer = await query_document(
             doc_id=doc_id, 
