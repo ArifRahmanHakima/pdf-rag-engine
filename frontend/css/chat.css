@@ -230,6 +230,38 @@
   flex-direction: column;
 }
 
+/* Fast reveal animation */
+.message-content.message-reveal {
+  animation: revealMessage 0.4s ease-out;
+}
+
+@keyframes revealMessage {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Fade in animation for action buttons */
+.message-actions.fade-in {
+  animation: fadeInUp 0.3s ease;
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
 .message-actions {
   display: flex;
   align-items: center;
@@ -318,11 +350,6 @@
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
-}
-
-/* More options button */
-.more-options-btn {
-  position: relative;
 }
 
 /* ============= SUGGESTED QUESTIONS ============= */

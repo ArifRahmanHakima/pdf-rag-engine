@@ -884,8 +884,8 @@ async processPDF(file) {
     if (doc.messages && doc.messages.length > 0) {
       console.log('💬 Loading', doc.messages.length, 'messages');
       doc.messages.forEach(msg => {
-        const isHtml = msg.role === 'bot';
-        ChatHandler.addMessage(msg.role, msg.text, isHtml, false);
+        // Bot messages will be parsed as markdown automatically
+        ChatHandler.addMessage(msg.role, msg.text, false, false);
       });
     } else {
       // Add welcome message if no history

@@ -134,13 +134,9 @@ async sendMessage() {
     }
   },
 
-  addMessage(role, text, isHtml = false, withReveal = false) {
+  addMessage(role, text, isHtml = false, withTyping = false) {
     const message = document.createElement('div');
     message.className = `message ${role}-message`;
-    
-    if (withReveal) {
-      message.classList.add('active');
-    }
     
     const contentWrapper = document.createElement('div');
     contentWrapper.className = 'message-content-wrapper';
@@ -148,16 +144,34 @@ async sendMessage() {
     const content = document.createElement('div');
     content.className = 'message-content';
     
-    if (withReveal) {
-      content.classList.add('revealing');
+    // For bot messages with typing animation
+    if (role === 'bot' && withTyping) {
+      content.innerHTML = '<span class="typing-cursor"></span>';
+      contentWrapper.appendChild(content);
+      message.appendChild(contentWrapper);
+      this.elements.messages.appendChild(message);
+      this.scrollToBottom();
+      
+      // Start typing animation
+      const htmlContent = isHtml && text.includes('<') ? text : marked.parse(text);
+      this.typeText(content, htmlContent, () => {
+        // Add action buttons after typing is complete
+        const actionsDiv = this.createMessageActions(content);
+        actionsDiv.classList.add('fade-in');
+        contentWrapper.appendChild(actionsDiv);
+      });
+      return;
     }
     
-    if (isHtml) {
-      content.innerHTML = text;
-    } else if (role === 'bot') {
-      // Parse markdown for bot messages
-      content.innerHTML = marked.parse(text);
+    // For bot messages without typing (from history)
+    if (role === 'bot') {
+      if (isHtml && text.includes('<')) {
+        content.innerHTML = text;
+      } else {
+        content.innerHTML = marked.parse(text);
+      }
     } else {
+      // User messages: plain text
       content.textContent = text;
     }
     
@@ -171,16 +185,23 @@ async sendMessage() {
     
     message.appendChild(contentWrapper);
     this.elements.messages.appendChild(message);
-    
-    // Remove active class after animation
-    if (withReveal) {
-      setTimeout(() => {
-        message.classList.remove('active');
-      }, 2000);
-    }
-    
-    // Smooth scroll to bottom
     this.scrollToBottom();
+  },
+
+  // Fast reveal animation - show all at once with smooth effect
+  typeText(element, html, onComplete) {
+    // Add animation class
+    element.classList.add('message-reveal');
+    element.innerHTML = html;
+    
+    // Scroll and complete
+    this.scrollToBottom();
+    
+    // Small delay then show action buttons
+    setTimeout(() => {
+      element.classList.remove('message-reveal');
+      if (onComplete) onComplete();
+    }, 400);
   },
 
   // Create message action buttons (Copy, Like, Dislike, Read aloud)
@@ -236,23 +257,10 @@ async sendMessage() {
     readBtn.title = 'Bacakan';
     readBtn.onclick = () => this.readAloud(contentElement, readBtn);
     
-    // More options button
-    const moreBtn = document.createElement('button');
-    moreBtn.className = 'message-action-btn more-options-btn';
-    moreBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="12" cy="12" r="1"></circle>
-        <circle cx="19" cy="12" r="1"></circle>
-        <circle cx="5" cy="12" r="1"></circle>
-      </svg>
-    `;
-    moreBtn.title = 'Opsi lainnya';
-    
     actionsDiv.appendChild(copyBtn);
     actionsDiv.appendChild(likeBtn);
     actionsDiv.appendChild(dislikeBtn);
     actionsDiv.appendChild(readBtn);
-    actionsDiv.appendChild(moreBtn);
     
     return actionsDiv;
   },
