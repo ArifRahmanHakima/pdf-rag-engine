@@ -9,3 +9,5 @@ uvicorn api.main:app --reload:
 Remove-Items -Path .\data\* -Recurse -Force:
 	Remove-Item uploads -Recurse -Force
 	Remove-Item rag_Storage -Recurse -Force
+Freeze requirements:
+	pip freeze > requirements.txt	

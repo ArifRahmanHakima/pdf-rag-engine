@@ -32,7 +32,13 @@ const ChatHandler = {
 
     this.elements.input.addEventListener('input', function () {
       this.style.height = 'auto';
-      this.style.height = Math.min(this.scrollHeight, 120) + 'px';
+      const newHeight = Math.min(this.scrollHeight, 200);
+      this.style.height = newHeight + 'px';
+      // Update send button position for multi-line input
+      const sendBtn = document.getElementById('sendBtn');
+      if (sendBtn) {
+        sendBtn.style.alignSelf = newHeight > 50 ? 'flex-end' : 'center';
+      }
     });
 
     this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
@@ -204,7 +210,7 @@ async sendMessage() {
     }, 400);
   },
 
-  // Create message action buttons (Copy, Like, Dislike, Read aloud)
+  // Create message action buttons (Copy, Read aloud)
   createMessageActions(contentElement) {
     const actionsDiv = document.createElement('div');
     actionsDiv.className = 'message-actions';
@@ -222,28 +228,6 @@ async sendMessage() {
     copyBtn.title = 'Salin teks';
     copyBtn.onclick = () => this.copyMessageNew(contentElement, copyBtn);
     
-    // Like button
-    const likeBtn = document.createElement('button');
-    likeBtn.className = 'message-action-btn';
-    likeBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path>
-      </svg>
-    `;
-    likeBtn.title = 'Respons bagus';
-    likeBtn.onclick = () => this.toggleLike(likeBtn);
-    
-    // Dislike button
-    const dislikeBtn = document.createElement('button');
-    dislikeBtn.className = 'message-action-btn';
-    dislikeBtn.innerHTML = `
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h2.67A2.31 2.31 0 0 1 22 4v7a2.31 2.31 0 0 1-2.33 2H17"></path>
-      </svg>
-    `;
-    dislikeBtn.title = 'Respons kurang bagus';
-    dislikeBtn.onclick = () => this.toggleDislike(dislikeBtn);
-    
     // Read aloud button
     const readBtn = document.createElement('button');
     readBtn.className = 'message-action-btn';
@@ -258,8 +242,6 @@ async sendMessage() {
     readBtn.onclick = () => this.readAloud(contentElement, readBtn);
     
     actionsDiv.appendChild(copyBtn);
-    actionsDiv.appendChild(likeBtn);
-    actionsDiv.appendChild(dislikeBtn);
     actionsDiv.appendChild(readBtn);
     
     return actionsDiv;
@@ -282,42 +264,6 @@ async sendMessage() {
       console.error('Failed to copy:', err);
       UIHandler.showError('Gagal menyalin teks');
     });
-  },
-
-  // Toggle like
-  toggleLike(button) {
-    const isLiked = button.classList.contains('liked');
-    
-    // Remove dislike if active
-    const parent = button.parentElement;
-    const dislikeBtn = parent.querySelector('.message-action-btn.disliked');
-    if (dislikeBtn) {
-      dislikeBtn.classList.remove('disliked');
-    }
-    
-    button.classList.toggle('liked');
-    
-    if (!isLiked) {
-      UIHandler.showSuccess('Terima kasih atas feedback positif!');
-    }
-  },
-
-  // Toggle dislike
-  toggleDislike(button) {
-    const isDisliked = button.classList.contains('disliked');
-    
-    // Remove like if active
-    const parent = button.parentElement;
-    const likeBtn = parent.querySelector('.message-action-btn.liked');
-    if (likeBtn) {
-      likeBtn.classList.remove('liked');
-    }
-    
-    button.classList.toggle('disliked');
-    
-    if (!isDisliked) {
-      UIHandler.showSuccess('Terima kasih atas feedback Anda!');
-    }
   },
 
   // Read aloud using Web Speech API
