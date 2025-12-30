@@ -244,20 +244,74 @@ const UIHandler = {
       return;
     }
 
-    if (confirm('Apakah Anda yakin ingin mereset chat ini? Semua pesan akan dihapus.')) {
-      // Clear messages in storage
-      if (STATE.documents[STATE.docId]) {
-        STATE.documents[STATE.docId].messages = [];
-        STATE.documents[STATE.docId].chatId = null;
-        DocStorage.saveAll();
-      }
-
-      // Clear chat messages on screen
-      ChatHandler.clearMessages(true);
-      STATE.chatId = null;
-
-      this.showSuccess('Chat berhasil direset!');
+    this.showResetConfirmModal();
+  },
+  
+  showResetConfirmModal() {
+    // Create modal if not exists
+    let modal = document.getElementById('resetModal');
+    if (!modal) {
+      const modalHTML = `
+        <div id="resetModal">
+          <div class="delete-modal-content">
+            <div class="delete-modal-header" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">
+              <span class="delete-icon">🔄</span>
+              <h3>Reset Chat</h3>
+            </div>
+            <div class="delete-modal-body">
+              <div class="delete-file-icon">💬</div>
+              <div class="delete-file-name">Reset semua pesan?</div>
+              <div class="delete-warning">Semua riwayat percakapan akan dihapus.</div>
+              <div class="delete-warning-highlight">
+                <span>💡</span>
+                <span>Dokumen tetap tersimpan</span>
+              </div>
+            </div>
+            <div class="delete-modal-actions">
+              <button class="btn btn-cancel" id="resetCancelBtn">Batal</button>
+              <button class="btn btn-delete" id="resetConfirmBtn" style="background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);">🔄 Reset</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHTML);
+      modal = document.getElementById('resetModal');
     }
+    
+    // Show modal
+    modal.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    
+    const closeModal = () => {
+      modal.style.display = 'none';
+      document.body.style.overflow = '';
+    };
+    
+    document.getElementById('resetCancelBtn').onclick = closeModal;
+    
+    modal.onclick = (e) => {
+      if (e.target === modal) closeModal();
+    };
+    
+    document.getElementById('resetConfirmBtn').onclick = () => {
+      closeModal();
+      this.confirmResetChat();
+    };
+  },
+  
+  confirmResetChat() {
+    // Clear messages in storage
+    if (STATE.documents[STATE.docId]) {
+      STATE.documents[STATE.docId].messages = [];
+      STATE.documents[STATE.docId].chatId = null;
+      DocStorage.saveAll();
+    }
+
+    // Clear chat messages on screen
+    ChatHandler.clearMessages(true);
+    STATE.chatId = null;
+
+    this.showSuccess('Chat berhasil direset!');
   },
 
   // Success notification
@@ -928,11 +982,81 @@ async processPDF(file) {
   },
   
   deleteDocument(docId, fileName) {
-    // Confirm deletion
-    if (!confirm(`Hapus dokumen "${fileName}"?\n\nSemua riwayat chat akan dihapus.`)) {
-      return;
+    // Show custom delete confirmation modal
+    this.showDeleteConfirmModal(docId, fileName);
+  },
+  
+  showDeleteConfirmModal(docId, fileName) {
+    // Create modal if not exists
+    let modal = document.getElementById('deleteModal');
+    if (!modal) {
+      const modalHTML = `
+        <div id="deleteModal">
+          <div class="delete-modal-content">
+            <div class="delete-modal-header">
+              <span class="delete-icon">🗑️</span>
+              <h3>Hapus Dokumen</h3>
+            </div>
+            <div class="delete-modal-body">
+              <div class="delete-file-icon">📄</div>
+              <div class="delete-file-name" id="deleteFileName"></div>
+              <div class="delete-warning">Dokumen ini akan dihapus permanen.</div>
+              <div class="delete-warning-highlight">
+                <span>⚠️</span>
+                <span>Semua riwayat chat akan ikut terhapus</span>
+              </div>
+            </div>
+            <div class="delete-modal-actions">
+              <button class="btn btn-cancel" id="deleteCancelBtn">Batal</button>
+              <button class="btn btn-delete" id="deleteConfirmBtn">🗑️ Hapus</button>
+            </div>
+          </div>
+        </div>
+      `;
+      document.body.insertAdjacentHTML('beforeend', modalHTML);
+      modal = document.getElementById('deleteModal');
     }
     
+    // Set filename
+    document.getElementById('deleteFileName').textContent = fileName;
+    
+    // Show modal
+    modal.style.display = 'block';
+    document.body.style.overflow = 'hidden';
+    
+    // Handle cancel
+    const cancelBtn = document.getElementById('deleteCancelBtn');
+    const confirmBtn = document.getElementById('deleteConfirmBtn');
+    
+    const closeModal = () => {
+      modal.style.display = 'none';
+      document.body.style.overflow = '';
+    };
+    
+    cancelBtn.onclick = closeModal;
+    
+    // Handle click outside
+    modal.onclick = (e) => {
+      if (e.target === modal) closeModal();
+    };
+    
+    // Handle ESC key
+    const escHandler = (e) => {
+      if (e.key === 'Escape') {
+        closeModal();
+        document.removeEventListener('keydown', escHandler);
+      }
+    };
+    document.addEventListener('keydown', escHandler);
+    
+    // Handle confirm
+    confirmBtn.onclick = () => {
+      closeModal();
+      this.confirmDeleteDocument(docId, fileName);
+    };
+  },
+  
+  confirmDeleteDocument(docId, fileName) {
     // Delete from storage
     DocStorage.deleteDocument(docId);
     
