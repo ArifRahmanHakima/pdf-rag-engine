@@ -133,40 +133,16 @@
     margin-bottom: 4px;
 }
 
-.processing-stage {
-    font-size: 14px;
-    color: #666;
-}
-
-/* Progress Section */
+/* Progress Section - Simplified */
 .progress-section {
-    margin: 20px 0;
-}
-
-.progress-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 8px;
-}
-
-.progress-label {
-    font-size: 13px;
-    color: #666;
-    font-weight: 500;
-}
-
-.progress-percent {
-    font-size: 18px;
-    font-weight: 700;
-    color: #667eea;
+    margin: 24px 0;
 }
 
 .progress-bar {
     width: 100%;
-    height: 10px;
+    height: 12px;
     background-color: #e8e8e8;
-    border-radius: 10px;
+    border-radius: 12px;
     overflow: hidden;
 }
 
@@ -175,33 +151,7 @@
     background: linear-gradient(90deg, #667eea, #764ba2);
     width: 0%;
     transition: width 0.4s ease;
-    border-radius: 10px;
-}
-
-/* Time Remaining */
-.time-remaining {
-    text-align: center;
-    margin: 24px 0 16px;
-    padding: 16px;
-    background: linear-gradient(135deg, #f5f7fa 0%, #e4e8ec 100%);
     border-radius: 12px;
-}
-
-.time-icon {
-    font-size: 32px;
-    margin-bottom: 8px;
-}
-
-.time-value {
-    font-size: 28px;
-    font-weight: 700;
-    color: #333;
-    margin-bottom: 4px;
-}
-
-.time-label {
-    font-size: 13px;
-    color: #666;
 }
 
 /* Status Message */
@@ -241,11 +191,12 @@
     align-items: center;
     gap: 10px;
     padding: 12px 16px;
-    background: #fff3e0;
+    background: linear-gradient(135deg, #e8f4fd 0%, #d6eaf8 100%);
     border-radius: 10px;
     margin-bottom: 16px;
     font-size: 13px;
-    color: #e65100;
+    color: #2874a6;
+    font-weight: 500;
 }
 
 .warning-banner.hidden {

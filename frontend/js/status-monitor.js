@@ -27,8 +27,8 @@ class StatusMonitor {
                         <div id="statusContent">
                             <!-- Warning Banner -->
                             <div class="warning-banner" id="warningBanner">
-                                <span>⚠️</span>
-                                <span>Mohon tunggu, jangan tutup halaman ini.</span>
+                                <span>⏳</span>
+                                <span>Mohon tunggu sebentar ya...</span>
                             </div>
                             
                             <!-- Processing Animation -->
@@ -37,45 +37,30 @@ class StatusMonitor {
                                     <div class="spinner"></div>
                                     <div class="spinner-icon" id="spinnerIcon">📄</div>
                                 </div>
-                                <div class="processing-text" id="processingText">Sedang Memproses...</div>
-                                <div class="processing-stage" id="processingStage">Mengekstrak teks dari PDF</div>
+                                <div class="processing-text" id="processingText">Sedang membaca PDF...</div>
                             </div>
                             
                             <!-- Progress Section -->
                             <div class="progress-section" id="progressSection">
-                                <div class="progress-header">
-                                    <span class="progress-label">Progress</span>
-                                    <span class="progress-percent" id="progressPercent">0%</span>
-                                </div>
                                 <div class="progress-bar">
                                     <div class="progress-fill" id="progressFill" style="width: 0%"></div>
                                 </div>
                             </div>
                             
-                            <!-- Time Remaining -->
-                            <div class="time-remaining" id="timeRemaining">
-                                <div class="time-icon">⏱️</div>
-                                <div class="time-value" id="timeValue">--</div>
-                                <div class="time-label">detik lagi</div>
-                            </div>
-                            
                             <!-- Status Message -->
                             <div class="status-message-box info" id="statusMessageBox">
                                 <span class="message-icon">💡</span>
-                                <span id="statusMessage">Mempersiapkan dokumen...</span>
+                                <span id="statusMessage">Sedang mempersiapkan dokumen Anda...</span>
                             </div>
                             
                             <!-- Completion State (Hidden by default) -->
                             <div class="completion-state hidden" id="completionState">
                                 <div class="completion-icon" id="completionIcon">✅</div>
-                                <div class="completion-title" id="completionTitle">Proses Selesai!</div>
-                                <div class="completion-subtitle" id="completionSubtitle">Dokumen siap digunakan untuk chat</div>
+                                <div class="completion-title" id="completionTitle">Selesai!</div>
+                                <div class="completion-subtitle" id="completionSubtitle">PDF siap untuk ditanyakan</div>
                                 <div class="completion-actions">
                                     <button class="action-btn primary" id="startChatBtn">
-                                        <span>💬</span> Mulai Chat
-                                    </button>
-                                    <button class="action-btn secondary" id="closeModalBtn">
-                                        Tutup
+                                        <span>💬</span> Mulai Tanya
                                     </button>
                                 </div>
                             </div>
@@ -92,7 +77,6 @@ class StatusMonitor {
 
     bindEvents() {
         const closeBtn = document.getElementById('closeStatusBtn');
-        const closeModalBtn = document.getElementById('closeModalBtn');
         const startChatBtn = document.getElementById('startChatBtn');
         
         // Close button - only works when not processing
@@ -102,8 +86,6 @@ class StatusMonitor {
                 this.closeModal();
             }
         };
-
-        closeModalBtn.onclick = () => this.closeModal();
         
         startChatBtn.onclick = () => {
             this.closeModal();
@@ -150,7 +132,6 @@ class StatusMonitor {
         // Show processing elements
         document.getElementById('processingAnimation').classList.remove('hidden');
         document.getElementById('progressSection').classList.remove('hidden');
-        document.getElementById('timeRemaining').classList.remove('hidden');
         document.getElementById('statusMessageBox').classList.remove('hidden');
         document.getElementById('warningBanner').classList.remove('hidden');
         
@@ -159,16 +140,13 @@ class StatusMonitor {
         
         // Reset values
         document.getElementById('progressFill').style.width = '0%';
-        document.getElementById('progressPercent').textContent = '0%';
-        document.getElementById('timeValue').textContent = '--';
         document.getElementById('spinnerIcon').textContent = '📄';
-        document.getElementById('processingText').textContent = 'Sedang Memproses...';
-        document.getElementById('processingStage').textContent = 'Mengekstrak teks dari PDF';
+        document.getElementById('processingText').textContent = 'Sedang membaca PDF...';
         
         // Reset message box
         const messageBox = document.getElementById('statusMessageBox');
         messageBox.className = 'status-message-box info';
-        document.getElementById('statusMessage').textContent = 'Mempersiapkan dokumen...';
+        document.getElementById('statusMessage').textContent = 'Sedang mempersiapkan dokumen Anda...';
     }
 
     setProcessingState(isProcessing) {
@@ -194,16 +172,12 @@ class StatusMonitor {
             const response = await fetch(`/upload/status/${docId}`);
             const data = await response.json();
 
-            // Update progress
+            // Update progress bar only
             const progress = data.progress || 0;
             document.getElementById('progressFill').style.width = progress + '%';
-            document.getElementById('progressPercent').textContent = progress + '%';
 
             // Update stage info
             this.updateStageInfo(data.current_stage);
-
-            // Update time remaining
-            this.updateTimeRemaining(data);
 
             // Update message
             this.updateMessage(data);
@@ -217,47 +191,24 @@ class StatusMonitor {
 
         } catch (error) {
             console.error('Error checking status:', error);
-            document.getElementById('statusMessage').textContent = 'Error: ' + error.message;
+            document.getElementById('statusMessage').textContent = 'Maaf, terjadi kesalahan. Silakan coba lagi.';
             document.getElementById('statusMessageBox').className = 'status-message-box error';
         }
     }
 
     updateStageInfo(stage) {
         const stageInfo = {
-            'Text Extraction': { icon: '📄', text: 'Mengekstrak Teks', desc: 'Membaca konten dari file PDF...' },
-            'Chunking': { icon: '✂️', text: 'Memecah Dokumen', desc: 'Membagi dokumen menjadi bagian kecil...' },
-            'Embedding': { icon: '🧠', text: 'Membuat Embedding', desc: 'Mengkonversi teks ke vektor...' },
-            'Indexing': { icon: '📊', text: 'Menyimpan Data', desc: 'Menyimpan ke database RAG...' },
-            'Completed': { icon: '✅', text: 'Selesai!', desc: 'Dokumen siap digunakan' }
+            'Text Extraction': { icon: '📄', text: 'Sedang membaca PDF...' },
+            'Chunking': { icon: '✂️', text: 'Sedang memproses...' },
+            'Embedding': { icon: '🧠', text: 'Hampir selesai...' },
+            'Indexing': { icon: '📊', text: 'Sedikit lagi...' },
+            'Completed': { icon: '✅', text: 'Selesai!' }
         };
 
-        const info = stageInfo[stage] || { icon: '⏳', text: 'Memproses...', desc: stage || 'Mohon tunggu...' };
+        const info = stageInfo[stage] || { icon: '⏳', text: 'Mohon tunggu...' };
         
         document.getElementById('spinnerIcon').textContent = info.icon;
         document.getElementById('processingText').textContent = info.text;
-        document.getElementById('processingStage').textContent = info.desc;
-    }
-
-    updateTimeRemaining(data) {
-        const timeValueEl = document.getElementById('timeValue');
-        
-        if (data.status === 'processing' && data.start_time && data.progress > 5) {
-            const elapsed = (Date.now() / 1000) - data.start_time;
-            const estimatedTotal = elapsed / (data.progress / 100);
-            const remaining = Math.max(0, Math.ceil(estimatedTotal - elapsed));
-            
-            if (remaining > 60) {
-                const mins = Math.floor(remaining / 60);
-                const secs = remaining % 60;
-                timeValueEl.textContent = `${mins}m ${secs}s`;
-            } else if (remaining > 0) {
-                timeValueEl.textContent = remaining;
-            } else {
-                timeValueEl.textContent = '< 5';
-            }
-        } else if (data.progress <= 5) {
-            timeValueEl.textContent = 'Menghitung...';
-        }
     }
 
     updateMessage(data) {
@@ -265,14 +216,14 @@ class StatusMonitor {
         const messageText = document.getElementById('statusMessage');
         
         const messages = {
-            'Text Extraction': '💡 Sedang membaca isi dokumen PDF Anda...',
-            'Chunking': '💡 Memecah dokumen agar mudah dicari...',
-            'Embedding': '💡 AI sedang memahami konteks dokumen...',
-            'Indexing': '💡 Menyimpan untuk pencarian cepat...',
-            'Completed': '✨ Dokumen berhasil diproses!'
+            'Text Extraction': '💡 Sedang membaca dokumen Anda...',
+            'Chunking': '💡 Mempersiapkan isi dokumen...',
+            'Embedding': '💡 AI sedang mempelajari dokumen...',
+            'Indexing': '💡 Hampir selesai, tunggu sebentar...',
+            'Completed': '✨ Selesai! Dokumen siap ditanyakan'
         };
 
-        messageText.textContent = messages[data.current_stage] || data.message || 'Memproses dokumen...';
+        messageText.textContent = messages[data.current_stage] || data.message || 'Mohon tunggu sebentar...';
         
         if (data.status === 'completed') {
             messageBox.className = 'status-message-box success';
@@ -290,7 +241,6 @@ class StatusMonitor {
         // Hide processing elements
         document.getElementById('processingAnimation').classList.add('hidden');
         document.getElementById('progressSection').classList.add('hidden');
-        document.getElementById('timeRemaining').classList.add('hidden');
         document.getElementById('statusMessageBox').classList.add('hidden');
         document.getElementById('warningBanner').classList.add('hidden');
 
@@ -300,13 +250,13 @@ class StatusMonitor {
 
         if (success) {
             document.getElementById('completionIcon').textContent = '✅';
-            document.getElementById('completionTitle').textContent = 'Proses Selesai!';
-            document.getElementById('completionSubtitle').textContent = 'Dokumen siap digunakan untuk chat';
-            document.getElementById('startChatBtn').innerHTML = '<span>💬</span> Mulai Chat';
+            document.getElementById('completionTitle').textContent = 'Selesai!';
+            document.getElementById('completionSubtitle').textContent = 'PDF siap untuk ditanyakan';
+            document.getElementById('startChatBtn').innerHTML = '<span>💬</span> Mulai Tanya';
         } else {
             document.getElementById('completionIcon').textContent = '❌';
-            document.getElementById('completionTitle').textContent = 'Proses Gagal';
-            document.getElementById('completionSubtitle').textContent = errorMessage || 'Terjadi kesalahan saat memproses dokumen';
+            document.getElementById('completionTitle').textContent = 'Gagal';
+            document.getElementById('completionSubtitle').textContent = errorMessage || 'Maaf, terjadi kesalahan. Silakan coba lagi.';
             document.getElementById('startChatBtn').innerHTML = '<span>🔄</span> Coba Lagi';
             document.getElementById('startChatBtn').onclick = () => {
                 this.closeModal();

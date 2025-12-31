@@ -341,12 +341,11 @@ async sendMessage() {
       btn.className = 'suggested-question-btn';
       btn.textContent = question;
       btn.onclick = () => {
-        this.elements.input.value = question;
-        this.elements.input.focus();
-        // Optionally auto-send
-        // this.sendMessage();
-        // Remove suggested questions after click
+        // Remove suggested questions immediately
         container.remove();
+        // Set question to input and auto-send
+        this.elements.input.value = question;
+        this.sendMessage();
       };
       questionsWrapper.appendChild(btn);
     });
