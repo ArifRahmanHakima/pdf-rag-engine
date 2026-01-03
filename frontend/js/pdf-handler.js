@@ -342,5 +342,17 @@ const PDFHandler = {
     if (wrapper) {
       wrapper.innerHTML = '';
     }
+    
+    if (this.elements.pageInfo) {
+      this.elements.pageInfo.textContent = 'of 1';
+    }
+    if (this.elements.pageInput) {
+      this.elements.pageInput.value = 1;
+    }
+  },
+
+  // Alias untuk reset - lebih mudah dibaca
+  clearPDF() {
+    this.reset();
   }
 };

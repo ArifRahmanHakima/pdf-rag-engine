@@ -4,14 +4,14 @@ import redis
 from datetime import datetime
 from api.services.db import get_postgres_conn
 
-# === Redis ===
+ # === Redis (penyimpanan sementara) ===
 redis_client = redis.Redis(
     host=os.getenv("REDIS_HOST", "localhost"),
     port=int(os.getenv("REDIS_PORT", 6379)),
     decode_responses=True
 )
 
-# ============ Redis Chat Memory ============= 
+ # ============ Memori Chat Redis ============= 
 def get_chat_history(chat_id: str):
     """Get chat history from Redis"""
     key = f"chat:{chat_id}"
@@ -27,20 +27,20 @@ def save_message_redis(chat_id: str, role: str, content: str):
     key = f"chat:{chat_id}"
     history = get_chat_history(chat_id)
     
-    # Tambahkan message baru
+    # Tambahkan pesan baru ke riwayat
     history.append({
         "role": role,
         "content": content,
         "timestamp": datetime.now().isoformat()
     })
     
-    # Simpan kembali ke Redis
+    # Simpan riwayat chat ke Redis
     redis_client.set(key, json.dumps(history))
     
-    # Set expiry 24 jam (opsional)
+    # Atur kadaluarsa 24 jam (opsional)
     redis_client.expire(key, 86400)
 
-# ============ Postgres Persistent Chat ============= 
+ # ============ Chat Persisten di Postgres ============= 
 def save_message_postgres(chat_id, doc_id, user_id, role, content):
     """Save message to PostgreSQL"""
     conn = get_postgres_conn()
@@ -69,7 +69,7 @@ def get_chat_history_postgres(chat_id):
             """, (chat_id,))
             rows = cur.fetchall()
             
-            # Convert to list of dicts
+                    # Ubah hasil query ke list of dict
             history = [
                 {
                     "role": row["role"],
@@ -84,11 +84,11 @@ def get_chat_history_postgres(chat_id):
 
 def delete_chat_history(chat_id: str):
     """Delete chat history from Redis and Postgres"""
-    # Delete from Redis
+    # Hapus dari Redis
     key = f"chat:{chat_id}"
     redis_client.delete(key)
     
-    # Delete from Postgres
+    # Hapus dari Postgres
     conn = get_postgres_conn()
     try:
         with conn.cursor() as cur:

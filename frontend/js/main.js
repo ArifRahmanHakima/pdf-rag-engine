@@ -35,6 +35,9 @@ document.addEventListener('DOMContentLoaded', () => {
       console.log('✅ Chat handler initialized');
     }
     
+    // Restore session setelah semua module siap
+    UIHandler.restoreSession();
+    
     console.log('✅ ChatPDF initialized successfully');
     console.log('📊 Configuration:', {
       maxFileSize: typeof Utils !== 'undefined' ? Utils.formatFileSize(CONFIG.MAX_FILE_SIZE) : 'N/A',

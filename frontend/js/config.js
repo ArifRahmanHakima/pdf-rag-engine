@@ -30,7 +30,8 @@ const STATE = {
   pageRendering: false,
   pageNumPending: null,
   scale: CONFIG.DEFAULT_SCALE,
-  isMobile: window.innerWidth <= 768,
+  isMobile: window.innerWidth <= 1024,
+  isTablet: window.innerWidth <= 900,
   isProcessing: false,
   ws: null,
   // Document management
