@@ -414,8 +414,66 @@ const AuthHandler = {
     return true;
   },
 
+  // Toggle password visibility
+  togglePasswordVisibility(inputId, buttonId) {
+    const input = document.getElementById(inputId);
+    const button = document.getElementById(buttonId);
+    
+    if (!input || !button) return;
+    
+    const icon = button.querySelector('i');
+    if (!icon) return;
+    
+    const isPassword = input.type === 'password';
+    
+    if (isPassword) {
+      input.type = 'text';
+      icon.classList.remove('fa-eye');
+      icon.classList.add('fa-eye-slash');
+      button.title = 'Hide Password';
+    } else {
+      input.type = 'password';
+      icon.classList.remove('fa-eye-slash');
+      icon.classList.add('fa-eye');
+      button.title = 'Show Password';
+    }
+  },
+
+  // Attach password toggle events
+  attachPasswordToggleEvents() {
+    // Login password toggle
+    const loginToggle = document.getElementById('loginPasswordToggle');
+    if (loginToggle) {
+      loginToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.togglePasswordVisibility('loginPassword', 'loginPasswordToggle');
+      });
+    }
+
+    // Register password toggle
+    const registerToggle = document.getElementById('registerPasswordToggle');
+    if (registerToggle) {
+      registerToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.togglePasswordVisibility('registerPassword', 'registerPasswordToggle');
+      });
+    }
+
+    // Register confirm password toggle
+    const confirmToggle = document.getElementById('registerConfirmPasswordToggle');
+    if (confirmToggle) {
+      confirmToggle.addEventListener('click', (e) => {
+        e.preventDefault();
+        this.togglePasswordVisibility('registerConfirmPassword', 'registerConfirmPasswordToggle');
+      });
+    }
+  },
+
   // Attach modal event listeners
   attachModalEvents() {
+    // Attach password toggle events
+    this.attachPasswordToggleEvents();
+    
     // Login modal
     const loginModal = document.getElementById('loginModal');
     const loginClose = document.getElementById('loginModalClose');
