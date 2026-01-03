@@ -2,34 +2,54 @@
 document.addEventListener('DOMContentLoaded', () => {
   console.log('🚀 Initializing ChatPDF...');
   
+  // Initialize auth handler first (isolated to ensure it always runs)
   try {
-    // Initialize status monitor first
+    if (typeof AuthHandler !== 'undefined') {
+      AuthHandler.init();
+      AuthHandler.attachModalEvents();
+      console.log('✅ Auth handler initialized');
+    }
+  } catch (authError) {
+    console.error('❌ Auth handler error:', authError);
+  }
+  
+  try {
+    // Initialize status monitor
     if (typeof statusMonitor !== 'undefined') {
       console.log('✅ Status monitor initialized');
     }
     
     // Initialize all modules in order
-    UIHandler.init();
-    PDFHandler.init();
-    ChatHandler.init();
+    if (typeof UIHandler !== 'undefined') {
+      UIHandler.init();
+      console.log('✅ UI handler initialized');
+    }
+    
+    if (typeof PDFHandler !== 'undefined') {
+      PDFHandler.init();
+      console.log('✅ PDF handler initialized');
+    }
+    
+    if (typeof ChatHandler !== 'undefined') {
+      ChatHandler.init();
+      console.log('✅ Chat handler initialized');
+    }
     
     console.log('✅ ChatPDF initialized successfully');
     console.log('📊 Configuration:', {
-      maxFileSize: Utils.formatFileSize(CONFIG.MAX_FILE_SIZE),
+      maxFileSize: typeof Utils !== 'undefined' ? Utils.formatFileSize(CONFIG.MAX_FILE_SIZE) : 'N/A',
       defaultScale: CONFIG.DEFAULT_SCALE,
-      userId: STATE.userId,
+      isLoggedIn: typeof AuthHandler !== 'undefined' ? AuthHandler.isLoggedIn() : false,
       docId: STATE.docId
     });
     
     // Check if PDF.js is loaded
     if (typeof pdfjsLib === 'undefined') {
       console.error('❌ PDF.js library not loaded!');
-      // alert('Error: PDF viewer library not loaded. Please refresh the page.');
     }
     
   } catch (error) {
     console.error('❌ Initialization error:', error);
-    // alert('Error initializing application. Please refresh the page.');
   }
 });
 
@@ -82,9 +102,11 @@ window.ChatPDFDebug = {
   PDFHandler,
   ChatHandler,
   UIHandler,
+  AuthHandler: typeof AuthHandler !== 'undefined' ? AuthHandler : null,
   Utils,
   DocStorage
 };
 
 console.log('💡 Debug tools available at window.ChatPDFDebug');
 console.log('📚 Loaded documents:', DocStorage.getAllDocuments().length);
+console.log('🔐 Auth status:', typeof AuthHandler !== 'undefined' ? (AuthHandler.isLoggedIn() ? 'Logged in' : 'Not logged in') : 'Auth not available');

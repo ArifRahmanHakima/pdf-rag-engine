@@ -469,6 +469,13 @@ const UIHandler = {
   },
 
 async processPDF(file) {
+    // Check if user is logged in
+    if (typeof AuthHandler !== 'undefined' && !AuthHandler.isLoggedIn()) {
+      AuthHandler.showLoginModal();
+      this.showError('Silakan login terlebih dahulu untuk upload PDF');
+      return;
+    }
+
     if (STATE.isProcessing) {
       this.showError('Sedang memproses file lain. Mohon tunggu...');
       return;
@@ -617,7 +624,9 @@ async processPDF(file) {
                 
                 // Cek status
                 try {
-                  const statusResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/status/${docId}`);
+                  const statusResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/status/${docId}`, {
+                    headers: AuthHandler.getAuthHeaders()
+                  });
                   const statusData = await statusResponse.json();
                   
                   if (statusData.status === 'completed') {
@@ -629,7 +638,9 @@ async processPDF(file) {
                     
                     // Fetch summary and suggested questions
                     try {
-                      const summaryResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/summary/${docId}`);
+                      const summaryResponse = await fetch(`${CONFIG.API_BASE_URL}/upload/summary/${docId}`, {
+                        headers: AuthHandler.getAuthHeaders()
+                      });
                       const summaryData = await summaryResponse.json();
                       
                       if (summaryData.status === 'success') {
@@ -713,8 +724,17 @@ async processPDF(file) {
         reject(new Error('Upload aborted'));
       });
 
-      // Send request
+      // Send request with auth header
       xhr.open('POST', `${CONFIG.API_BASE_URL}/upload`);
+      
+      // Add auth header if logged in
+      if (typeof AuthHandler !== 'undefined' && AuthHandler.isLoggedIn()) {
+        const token = AuthHandler.getToken();
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+      }
+      
       xhr.send(formData);
     });
   },
@@ -1170,5 +1190,15 @@ async processPDF(file) {
       toast.classList.remove('show');
       setTimeout(() => toast.remove(), 300);
     }, 3000);
+  },
+
+  // Show welcome screen (used when logging out)
+  showWelcomeScreen() {
+    if (this.elements.welcomeScreen) {
+      this.elements.welcomeScreen.style.display = 'flex';
+    }
+    if (this.elements.chatInterface) {
+      this.elements.chatInterface.classList.remove('active');
+    }
   }
 };

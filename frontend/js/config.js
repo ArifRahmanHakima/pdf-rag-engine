@@ -20,7 +20,9 @@ const CONFIG = {
 const STATE = {
   chatId: null,
   docId: null,
-  userId: "user_" + Math.random().toString(36).substr(2, 9),
+  userId: null, // Will be set from auth
+  currentUser: null, // Logged in user object
+  authToken: null, // JWT token
   currentPdfName: "",
   currentFileName: "",
   pdfDoc: null,

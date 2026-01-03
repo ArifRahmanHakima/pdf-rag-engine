@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks, Depends
 from fastapi.responses import JSONResponse, FileResponse
 import os
 import shutil
@@ -13,29 +13,47 @@ from api.services.pdf_processor import (
     ProcessStatus,
     rag_instances
 )
+from api.routes.auth import get_current_user
+from api.services.auth import (
+    create_document_record, 
+    update_document_status, 
+    verify_document_access,
+    delete_document_record,
+    get_document_by_id
+)
 
 router = APIRouter()
 
 # Background task untuk proses PDF
-async def process_pdf_background(file_path: str, filename: str):
+async def process_pdf_background(file_path: str, filename: str, doc_id: str):
     """Process PDF di background dan generate summary"""
     try:
         # Proses PDF
-        doc_id, message = await process_pdf_async(file_path)
+        result_doc_id, message = await process_pdf_async(file_path)
         
         # Generate summary
         summary = await generate_summary_async(file_path, doc_id)
+        
+        # Update document status to embedded
+        update_document_status(doc_id, "embedded")
         
         print(f"✅ Background processing completed for {filename}")
         return doc_id, summary
         
     except Exception as e:
         print(f"❌ Background processing failed for {filename}: {str(e)}")
+        # Update status to failed
+        update_document_status(doc_id, "failed")
         raise
 
 @router.post("")
 @router.post("/")
-async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
+async def upload_pdf(
+    file: UploadFile = File(...), 
+    background_tasks: BackgroundTasks = BackgroundTasks(),
+    current_user: dict = Depends(get_current_user)
+):
+    """Upload PDF dengan autentikasi"""
     # Validasi ekstensi
     if not file.filename.endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Hanya file PDF yang diizinkan.")
@@ -66,11 +84,23 @@ async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundT
         # Generate doc_id langsung
         doc_id = get_doc_id(file.filename)
         
+        # Create document record in database
+        doc_record = create_document_record(
+            user_id=current_user["id"],
+            doc_id=doc_id,
+            filename=file.filename,
+            status="processing"
+        )
+        
+        if not doc_record:
+            raise HTTPException(status_code=500, detail="Gagal menyimpan record dokumen")
+        
         # Tambahkan background task untuk proses PDF
         background_tasks.add_task(
             process_pdf_background, 
             file_path, 
-            file.filename
+            file.filename,
+            doc_id
         )
         
         # Return response langsung (jangan tunggu proses selesai)
@@ -78,6 +108,7 @@ async def upload_pdf(file: UploadFile = File(...), background_tasks: BackgroundT
             "status": "queued",
             "filename": file.filename,
             "doc_id": doc_id,
+            "user_id": current_user["id"],
             "message": f"File {file.filename} diterima dan sedang diproses di background. Gunakan doc_id ini untuk melihat status atau bertanya.",
             "note": "Proses PDF memakan waktu beberapa saat. Cek status menggunakan endpoint /status/{doc_id}"
         }
@@ -102,9 +133,16 @@ async def get_upload_status(doc_id: str):
     }
 
 @router.delete("/{doc_id}")
-async def delete_document(doc_id: str):
-    """Delete a document and its associated data"""
+async def delete_document(doc_id: str, current_user: dict = Depends(get_current_user)):
+    """Delete a document and its associated data (hanya milik user sendiri)"""
     try:
+        # Verify document access
+        if not verify_document_access(current_user["id"], doc_id):
+            raise HTTPException(status_code=403, detail="Anda tidak memiliki akses ke dokumen ini")
+        
+        # Delete document record from database
+        delete_document_record(doc_id, current_user["id"])
+        
         # Remove from RAG instances cache
         if doc_id in rag_instances:
             del rag_instances[doc_id]
@@ -121,6 +159,8 @@ async def delete_document(doc_id: str):
             "message": f"Document {doc_id} deleted successfully"
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"❌ Error deleting document {doc_id}: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Gagal menghapus dokumen: {str(e)}")

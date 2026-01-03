@@ -21,16 +21,17 @@ const ChatHandler = {
   },
 
   attachEvents() {
-    this.elements.sendBtn.addEventListener('click', () => this.sendMessage());
+    // Use optional chaining to prevent null errors
+    this.elements.sendBtn?.addEventListener('click', () => this.sendMessage());
 
-    this.elements.input.addEventListener('keypress', (e) => {
+    this.elements.input?.addEventListener('keypress', (e) => {
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         this.sendMessage();
       }
     });
 
-    this.elements.input.addEventListener('input', function () {
+    this.elements.input?.addEventListener('input', function () {
       this.style.height = 'auto';
       const newHeight = Math.min(this.scrollHeight, 200);
       this.style.height = newHeight + 'px';
@@ -41,23 +42,31 @@ const ChatHandler = {
       }
     });
 
-    this.elements.fastBtn.addEventListener('click', () => this.setMode('fast'));
-    this.elements.qualityBtn.addEventListener('click', () => this.setMode('quality'));
+    // Only add listeners if elements exist
+    this.elements.fastBtn?.addEventListener('click', () => this.setMode('fast'));
+    this.elements.qualityBtn?.addEventListener('click', () => this.setMode('quality'));
 
-    this.elements.messages.addEventListener('click', () => {
-      this.elements.input.focus();
+    this.elements.messages?.addEventListener('click', () => {
+      this.elements.input?.focus();
     });
   },
 
   setMode(mode) {
     this.currentMode = mode;
-    this.elements.fastBtn.classList.toggle('active', mode === 'fast');
-    this.elements.qualityBtn.classList.toggle('active', mode === 'quality');
+    this.elements.fastBtn?.classList.toggle('active', mode === 'fast');
+    this.elements.qualityBtn?.classList.toggle('active', mode === 'quality');
   },
 
 async sendMessage() {
     const question = this.elements.input.value.trim();
     if (!question) return;
+
+    // Check if user is logged in
+    if (typeof AuthHandler !== 'undefined' && !AuthHandler.isLoggedIn()) {
+      AuthHandler.showLoginModal();
+      UIHandler.showError('Silakan login terlebih dahulu');
+      return;
+    }
 
     // Check if PDF is loaded
     if (!STATE.docId) {
@@ -84,18 +93,21 @@ async sendMessage() {
       const params = new URLSearchParams({
         question: question,
         doc_id: STATE.docId,  // Gunakan doc_id yang sudah disimpan
-        user_id: STATE.userId,
       });
       
       if (STATE.chatId) {
         params.append('chat_id', STATE.chatId);
       }
       
+      // Get auth headers
+      const headers = {
+        'Content-Type': 'application/json',
+        ...(typeof AuthHandler !== 'undefined' ? AuthHandler.getAuthHeaders() : {})
+      };
+      
       const response = await fetch(`${CONFIG.API_BASE_URL}/chat/send?${params.toString()}`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: headers
       });
       
       if (!response.ok) {

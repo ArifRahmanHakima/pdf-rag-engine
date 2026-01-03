@@ -1,12 +1,14 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Depends
 from api.services.rag_engine import query_document
 from api.services.memory import get_chat_history, save_message_redis, save_message_postgres
+from api.routes.auth import get_current_user
+from api.services.auth import verify_document_access
 import uuid
 
 router = APIRouter()
 
 @router.get("/history")
-async def get_history(chat_id: str):
+async def get_history(chat_id: str, current_user: dict = Depends(get_current_user)):
     """Get chat history from Redis"""
     try:
         messages = get_chat_history(chat_id)
@@ -18,10 +20,10 @@ async def get_history(chat_id: str):
 async def send_message(
     question: str = Query(...),
     doc_id: str = Query(...),
-    user_id: str = Query(...),
     chat_id: str = Query(None),
+    current_user: dict = Depends(get_current_user)
 ):
-    """Send message and get response from specific document"""
+    """Send message and get response from specific document (dengan autentikasi)"""
     
     # Validasi input
     if not question or not question.strip():
@@ -29,6 +31,13 @@ async def send_message(
     
     if not doc_id:
         raise HTTPException(status_code=400, detail="Document ID tidak boleh kosong")
+    
+    # Verify document access
+    if not verify_document_access(current_user["id"], doc_id):
+        raise HTTPException(status_code=403, detail="Anda tidak memiliki akses ke dokumen ini")
+    
+    # Get user_id from authenticated user
+    user_id = str(current_user["id"])
     
     # Buat chat_id baru jika belum ada
     if not chat_id:

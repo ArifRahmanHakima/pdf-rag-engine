@@ -2,9 +2,10 @@ raganything[all]
 fastapi 
 uvicorn 
 python-dotenv
-pydantic
+pydantic[email]
 redis
 sentence-transformers
 transformers
 qdrant-client 
 psycopg2-binary
+PyJWT

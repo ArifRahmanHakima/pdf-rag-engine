@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import os
-from api.routes import upload, chat
+from api.routes import upload, chat, auth
 
 app = FastAPI(title="Chatbot PDF RAGAnything")
 
@@ -16,6 +16,7 @@ app.add_middleware(
 )
 
 # REGISTER ROUTES API
+app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(upload.router, prefix="/upload", tags=["Upload"])
 app.include_router(chat.router, prefix="/chat", tags=["Chat"])
 

@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="css/welcome.css" />
   <link rel="stylesheet" href="css/chat.css" />
   <link rel="stylesheet" href="css/pdf-viewer.css" />
+  <link rel="stylesheet" href="css/auth.css" />
   <link rel="stylesheet" href="css/responsive.css" />
   <link rel="stylesheet" href="css/status-monitor.css" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" />
@@ -38,6 +39,11 @@
         <button class="header-btn" id="newChatBtn">
           <i class="fa-solid fa-upload"></i>Upload PDF
         </button>
+      </div>
+      <div class="header-right" id="authArea">
+        <!-- Auth buttons will be injected here by AuthHandler -->
+        <button class="auth-btn signin-btn" id="signinBtn">Sign In</button>
+        <button class="auth-btn signup-btn" id="signupBtn">Sign Up</button>
       </div>
     </header>
 
@@ -218,9 +224,70 @@
     </div>
   </div>
 
+  <!-- Login Modal -->
+  <div class="auth-modal-overlay" id="loginModal">
+    <div class="auth-modal">
+      <button class="auth-modal-close" id="loginModalClose">&times;</button>
+      <div class="auth-modal-header">
+        <h2>Masuk</h2>
+        <p>Masuk ke akun Anda untuk melanjutkan</p>
+      </div>
+      <form id="loginForm" class="auth-form">
+        <div class="auth-error" id="loginError" style="display: none;"></div>
+        <div class="form-group">
+          <label for="loginEmail">Email</label>
+          <input type="email" id="loginEmail" placeholder="Masukkan email Anda" required>
+        </div>
+        <div class="form-group">
+          <label for="loginPassword">Password</label>
+          <input type="password" id="loginPassword" placeholder="Masukkan password Anda" required>
+        </div>
+        <button type="submit" class="auth-submit-btn" id="loginSubmitBtn">Masuk</button>
+      </form>
+      <div class="auth-switch">
+        Belum punya akun? <a href="#" id="switchToRegister">Daftar</a>
+      </div>
+    </div>
+  </div>
+
+  <!-- Register Modal -->
+  <div class="auth-modal-overlay" id="registerModal">
+    <div class="auth-modal">
+      <button class="auth-modal-close" id="registerModalClose">&times;</button>
+      <div class="auth-modal-header">
+        <h2>Daftar</h2>
+        <p>Buat akun baru untuk mulai menggunakan ChatPDF</p>
+      </div>
+      <form id="registerForm" class="auth-form">
+        <div class="auth-error" id="registerError" style="display: none;"></div>
+        <div class="form-group">
+          <label for="registerName">Nama</label>
+          <input type="text" id="registerName" placeholder="Masukkan nama Anda" required>
+        </div>
+        <div class="form-group">
+          <label for="registerEmail">Email</label>
+          <input type="email" id="registerEmail" placeholder="Masukkan email Anda" required>
+        </div>
+        <div class="form-group">
+          <label for="registerPassword">Password</label>
+          <input type="password" id="registerPassword" placeholder="Minimal 8 karakter" required minlength="8">
+        </div>
+        <div class="form-group">
+          <label for="registerConfirmPassword">Konfirmasi Password</label>
+          <input type="password" id="registerConfirmPassword" placeholder="Ulangi password Anda" required>
+        </div>
+        <button type="submit" class="auth-submit-btn" id="registerSubmitBtn">Daftar</button>
+      </form>
+      <div class="auth-switch">
+        Sudah punya akun? <a href="#" id="switchToLogin">Masuk</a>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <script src="js/config.js"></script>
+  <script src="js/auth-handler.js"></script>
   <script src="js/status-monitor.js"></script>
   <script src="js/pdf-handler.js"></script>
   <script src="js/chat-handler.js"></script>
