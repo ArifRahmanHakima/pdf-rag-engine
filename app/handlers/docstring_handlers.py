@@ -54,38 +54,48 @@ def get_upload_handler_docstring(
         Frontend will poll /api/status/{session_id} untuk wait sampai "ready"
         """
         try:
-            rag_instance = rag_instance_getter()
+            # Initialize RAG instance on first use (same as OCR handler)
+            from main_server import _initialize_rag_instance
+            rag_instance = await _initialize_rag_instance()
+            
             if rag_instance is None:
                 return JSONResponse(
-                    content={"success": False, "error": "RAG not ready"},
+                    content={"success": False, "error": "RAG initialization failed"},
                     status_code=503
                 )
             
             # Generate new session
             session_id = get_next_session_func(sessions_dir)
-            session_dir = sessions_dir / session_id
-            session_dir.mkdir(parents=True, exist_ok=True)
             
-            # Create document ID dengan suffix "_docstring" untuk identification
-            doc_id = Path(file.filename).stem + "_docstring"
-            doc_upload_dir = session_dir / "documents" / doc_id
-            doc_upload_dir.mkdir(parents=True, exist_ok=True)
+            # DISABLED: Local file storage
+            # session_dir = sessions_dir / session_id
+            # session_dir.mkdir(parents=True, exist_ok=True)
+            # doc_upload_dir = session_dir / "documents" / doc_id
+            # doc_upload_dir.mkdir(parents=True, exist_ok=True)
+            # pdf_path = doc_upload_dir / file.filename
+            # with open(pdf_path, 'wb') as f:
+            #     f.write(await file.read())
             
-            # Save uploaded PDF file
-            pdf_path = doc_upload_dir / file.filename
-            with open(pdf_path, 'wb') as f:
-                f.write(await file.read())
+            # Create document ID (same format as OCR - will use doc_type field to differentiate)
+            doc_id = Path(file.filename).stem
             
-            print(f"[✓] PDF saved: {pdf_path}", flush=True)
+            # Store PDF in memory for processing
+            pdf_content = await file.read()
+            import tempfile
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp:
+                tmp.write(pdf_content)
+                pdf_path = tmp.name
             
-            # Save session metadata dengan extractor marker
-            save_metadata_func(session_id, {
-                "session_id": session_id,
-                "filename": file.filename,
-                "upload_time": datetime.now().isoformat(),
-                "status": "ingesting",
-                "extractor": "docstring"  # Mark ini untuk DocString
-            }, sessions_dir)
+            print(f"[✓] PDF buffered in memory for processing", flush=True)
+            
+            # DISABLED: Local metadata file storage
+            # save_metadata_func(session_id, {
+            #     "session_id": session_id,
+            #     "filename": file.filename,
+            #     "upload_time": datetime.now().isoformat(),
+            #     "status": "ingesting",
+            #     "extractor": "docstring"
+            # }, sessions_dir)
             
             # Update session status untuk frontend polling
             session_status[session_id] = {

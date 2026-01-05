@@ -3,7 +3,7 @@ FastAPI RAG Chatbot Server - Main entry point
 Modular architecture with services and handlers separated
 """
 
-import os, sys, io, json
+import os, sys, io, json, tempfile
 from pathlib import Path
 from contextlib import asynccontextmanager
 
@@ -32,6 +32,10 @@ from lightrag import LightRAG
 from app.services.search_logic import search_chunks_strict
 from main_openrouter import extract_text_from_pdf_with_ocr
 from app.services.docstring_service import extract_with_docstring_sync
+
+# Database imports
+from app.services.database_service import get_database_service
+from app.db.models import SessionLocal
 
 # Modular imports
 from app.utils import (
@@ -80,14 +84,21 @@ print("\n[*] Starting RAG Server (modular architecture)...\n")
 
 # Configuration
 config = RAGAnythingConfig()
-WORKING_DIR = config.working_dir
-SESSIONS_DIR = Path(WORKING_DIR) / "pdf_sessions"
-SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
+
+# Use TEMPORARY directory for RAG working files (NOT persistent storage)
+# This prevents rag_storage folder from accumulating files
+TEMP_WORKING_DIR = tempfile.mkdtemp(prefix="lightrag_", suffix="_tmp")
+print(f"[*] RAG working directory (temp): {TEMP_WORKING_DIR}")
+
+SESSIONS_DIR = Path(config.working_dir) / "pdf_sessions"
+# DO NOT create SESSIONS_DIR - use database only
+# SESSIONS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Global state
 embedding_func = None
 rag_instance = None
 session_status = {}
+db_service = None
 
 
 def _load_embedding_model():
@@ -101,54 +112,30 @@ def _load_embedding_model():
     return embedding_func
 
 
-def _restore_sessions():
-    """Restore session state from disk on startup"""
-    global session_status
-    
-    if not SESSIONS_DIR.exists():
-        return
-    
-    # Load all session metadata
-    for session_dir in SESSIONS_DIR.iterdir():
-        if session_dir.is_dir():
-            session_id = session_dir.name
-            metadata_file = session_dir / "metadata.json"
-            
-            if metadata_file.exists():
-                try:
-                    with open(metadata_file, 'r', encoding='utf-8') as f:
-                        metadata = json.load(f)
-                    # Restore session status
-                    session_status[session_id] = {
-                        "status": "ready",
-                        "progress": "Restored",
-                        "selected_doc": metadata.get("selected_doc", "")
-                    }
-                    print(f"[✓] Restored session: {session_id}")
-                except Exception as e:
-                    print(f"[!] Error restoring session {session_id}: {e}")
-    
-    if session_status:
-        print(f"[✓] Restored {len(session_status)} sessions\n")
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+async def _initialize_rag_instance():
+    """Lazy initialize RAG instance on first use"""
     global embedding_func, rag_instance
     
-    print("[*] Initializing system...")
+    if rag_instance is not None:
+        return rag_instance
     
-    # Load embedding model
-    embedding_func = _load_embedding_model()
-    globals()['embedding_func'] = embedding_func  # Ensure global assignment
+    print("\n[*] Initializing RAG instance on first use...")
+    print(f"[*] Using temporary working directory: {TEMP_WORKING_DIR}")
     
-    # Create RAG instance
+    # Load embedding model if not loaded
+    if embedding_func is None:
+        embedding_func = _load_embedding_model()
+        globals()['embedding_func'] = embedding_func
+    
+    # Create RAG instance with TEMPORARY working directory
     rag_instance = LightRAG(
-        working_dir=WORKING_DIR,
+        working_dir=TEMP_WORKING_DIR,  # Use temp dir - NOT persistent
         llm_model_func=llm_model_func_openrouter,
         embedding_func=embedding_func,
     )
-    globals()['rag_instance'] = rag_instance  # Ensure global assignment
+    globals()['rag_instance'] = rag_instance
     
     # Initialize storages
     await rag_instance.initialize_storages()
@@ -158,10 +145,29 @@ async def lifespan(app: FastAPI):
     except:
         pass
     
-    # Restore sessions from disk
-    _restore_sessions()
+    print("[✓] RAG instance initialized\n")
+    return rag_instance
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global embedding_func, rag_instance, db_service
     
-    print("[✓] System ready\n")
+    print("[*] Initializing system...")
+    
+    # Initialize database service (REQUIRED)
+    db_service = get_database_service()
+    print("[✓] Database service initialized (PostgreSQL + Qdrant)")
+    
+    # Load embedding model immediately (needed for embeddings)
+    embedding_func = _load_embedding_model()
+    globals()['embedding_func'] = embedding_func
+    
+    # RAG instance will be lazily initialized on first upload
+    print("[✓] System ready (RAG will initialize on first upload)\n")
+    
+    # Restore sessions from disk (DISABLED - using DB only)
+    # _restore_sessions()
     
     yield
     
@@ -245,10 +251,7 @@ app.get("/api/pdf/{session_id}")(
 # Delete endpoints
 app.delete("/api/delete-document/{session_id}/{doc_id}")(
     get_delete_document_handler(
-        SESSIONS_DIR,
-        Path(WORKING_DIR),
-        session_status,
-        delete_document_service
+        delete_func=delete_document_service
     )
 )
 
@@ -256,7 +259,7 @@ app.delete("/api/delete-document/{session_id}/{doc_id}")(
 app.post("/api/query")(
     get_query_handler(
         SESSIONS_DIR,
-        Path(WORKING_DIR),
+        SESSIONS_DIR,
         session_status,
         search_chunks_from_session,
         search_chunks_strict,
@@ -273,7 +276,7 @@ app.post("/api/query")(
 app.delete("/api/sessions/{session_id}")(
     get_delete_session_handler(
         SESSIONS_DIR,
-        Path(WORKING_DIR),
+        SESSIONS_DIR,
         session_status,
         delete_session_service
     )
