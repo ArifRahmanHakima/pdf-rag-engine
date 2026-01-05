@@ -119,7 +119,8 @@ def get_upload_handler_docstring(
                     Path(sessions_dir.parent),
                     session_status,
                     extract_with_docstring_func,  # Pass DocString extractor
-                    docstring_api_key  # Pass API key
+                    docstring_api_key,  # Pass API key
+                    pdf_content  # Pass PDF binary content (CRITICAL FIX)
                 )
             
             return JSONResponse(content={

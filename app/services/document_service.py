@@ -58,11 +58,7 @@ async def ingest_pdf_async(
         ocr_start = time.time()
         
         if docstring_api_key:
-            # Use DocString extractor with API key
-            if not docstring_api_key:
-                raise ValueError("DOCSTRING_API_KEY not configured in .env")
-            
-            # Note: extract_text_func may return a coroutine (async function)
+            # Try DocString extraction first
             try:
                 result = extract_text_func(pdf_path, docstring_api_key)
                 # Check if result is a coroutine and await it
@@ -75,25 +71,28 @@ async def ingest_pdf_async(
                 # Verify extraction succeeded
                 if not text or not text.strip():
                     raise ValueError("DocString extraction returned empty content")
+                
+                # Clean DocString markdown output (remove HTML tags, noise, etc)
+                text = clean_docstring_markdown(text)
                     
             except Exception as extract_error:
                 print(f"\n[!] DocString extraction failed: {extract_error}", flush=True)
-                session_status[session_id]["status"] = "error"
-                session_status[session_id]["error"] = f"DocString extraction failed: {str(extract_error)}"
-                return False
-            
-            # Clean DocString markdown output (remove HTML tags, noise, etc)
-            text = clean_docstring_markdown(text)
-            
-            # DEBUG: Save cleaned output to file for inspection (DISABLED)
-            # Local file storage disabled - all data stored in PostgreSQL + Qdrant only
-            # session_dir = sessions_dir / session_id
-            # doc_chunks_dir = session_dir / "documents" / doc_id
-            # doc_chunks_dir.mkdir(parents=True, exist_ok=True)
-            # debug_output_file = doc_chunks_dir / "docstring_cleaned_output.md"
-            # with open(debug_output_file, 'w', encoding='utf-8') as f:
-            #     f.write(text)
-            # print(f"\n[DEBUG] DocString cleaned output saved to {debug_output_file}", flush=True)
+                print(f"[*] Falling back to OCR extraction...", end='', flush=True)
+                
+                # Fallback to OCR
+                try:
+                    text = extract_text_func(pdf_path, use_ocr=True)
+                    if text and text.strip():
+                        extractor_type = "OCR (fallback from DocString)"
+                        docstring_api_key = None  # Mark as OCR since DocString failed
+                    else:
+                        session_status[session_id]["status"] = "error"
+                        session_status[session_id]["error"] = f"Both DocString and OCR extraction failed"
+                        return False
+                except Exception as ocr_error:
+                    session_status[session_id]["status"] = "error"
+                    session_status[session_id]["error"] = f"DocString failed: {str(extract_error)}, OCR also failed: {str(ocr_error)}"
+                    return False
         else:
             # Use existing OCR extractor
             text = extract_text_func(pdf_path, use_ocr=True)

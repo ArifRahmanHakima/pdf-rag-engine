@@ -433,7 +433,10 @@ def get_query_handler(
                 print(f"[!] No chunks found for doc {doc_id}")
                 return JSONResponse(content={"success": True, "answer": answer})
             
-            context = chunks[0]['content']
+            # Combine all relevant chunks as context (not just first chunk)
+            # This ensures bot has full context from document, not just one snippet
+            context = "\n\n---\n\n".join([chunk['content'] for chunk in chunks])
+            print(f"[✓] Combined {len(chunks)} chunks into context ({len(context)} chars)", flush=True)
             
             # Detect query type
             question_lower = question.lower()
