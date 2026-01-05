@@ -68,9 +68,12 @@ async def process_query(
     )
     t_llm = time.time() - t_llm_start
     print(f"[OK] LLM: {t_llm:.2f}s")
+    print(f"[DEBUG] LLM Raw Response ({len(answer)} chars): {answer[:200] if answer else '(EMPTY)'}", flush=True)
     
     # Clean up response formatting
-    return cleanup_func(answer)
+    cleaned = cleanup_func(answer)
+    print(f"[DEBUG] After Cleanup ({len(cleaned)} chars): {cleaned[:200] if cleaned else '(EMPTY)'}", flush=True)
+    return cleaned
 
 
 def _build_prompts(question: str, context: str, is_summary_query: bool, is_table_query: bool, question_lower: str):

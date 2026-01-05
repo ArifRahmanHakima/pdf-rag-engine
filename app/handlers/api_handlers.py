@@ -443,6 +443,7 @@ def get_query_handler(
             is_summary_query = any(kw in question_lower for kw in ['jelaskan isi dokumen', 'ringkas', 'summary', 'overview', 'ringkasan', 'apa isi dokumen', 'tentang dokumen'])
             is_table_query = any(kw in question_lower for kw in ['tabel', 'daftar', 'table', 'kategori', 'kelompok', 'peringkat', 'isi tabel', 'jelaskan tabel'])
             is_section_query = any(kw in question_lower for kw in ['menimbang', 'mengingat', 'menetapkan', 'memutuskan'])
+            print(f"[DEBUG] Query={question}, Type: summary={is_summary_query}, table={is_table_query}, section={is_section_query}", flush=True)
             
             # Process query
             answer = await process_query_func(
